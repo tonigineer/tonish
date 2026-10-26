@@ -1,0 +1,10 @@
+[package]
+name = "renderer"
+description = "drawing: shapes by signed distance, on the CPU (the GPU comes later)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

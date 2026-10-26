@@ -1,0 +1,11 @@
+[package]
+name = "tonish"
+description = "A desktop shell for Wayland"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+engine.workspace = true
+
+[lints]
+workspace = true

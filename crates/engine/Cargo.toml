@@ -1,0 +1,11 @@
+[package]
+name = "engine"
+description = "desktop side: layer surfaces, drawing them"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+renderer.workspace = true
+
+[lints]
+workspace = true
