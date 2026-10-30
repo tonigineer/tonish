@@ -9,12 +9,12 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("-v" | "--version") => {
             println!("toniSH {}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS
+            ExitCode::SUCCESS
         }
         _ => {
             println!("usage: toniSH [--version]");
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
+    }
     // code.exit_process()  <- unstable feature, use when available
 }
