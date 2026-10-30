@@ -16,4 +16,5 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // code.exit_process()  <- unstable feature, use when available
 }
