@@ -5,7 +5,8 @@
 use png;
 use std::path::Path;
 
-use crate::scene::{Rgba, Shape};
+use crate::scene::Rgba;
+use crate::shapes::Shape;
 
 /// RGBA rather than the rasteriser's BGRA, because that is what PNG stores.
 /// Premultiplied, because that is what the compositor shows. PNG means
@@ -127,7 +128,8 @@ impl Picture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Circle, Point, Rect, Scene};
+    use crate::scene::{Point, Scene};
+    use crate::shapes::{Circle, Rect};
 
     fn rect(x0: f32, y0: f32, x1: f32, y1: f32, color: Rgba) -> Rect {
         Rect {

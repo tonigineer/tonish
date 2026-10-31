@@ -1,11 +1,16 @@
-//! Evaluates every shape's signed distance at every pixel it may cover,
-//! exactly as a GPU fragment shader would, so that its output stays a
-//! faithful reference for a future GPU backend and a fallback where there is
-//! no GPU. It is written to be obviously correct rather than fast; the tests
-//! pin its behaviour so that optimisations, such as filling the solid
-//! interior of opaque shapes directly, can be checked against them.
+//! Evaluates the signed distance at the pixels a shape may cover only
+//! partly, exactly as a GPU fragment shader would, so that its output stays
+//! a faithful reference for a future GPU backend and a fallback where there
+//! is no GPU. Where a shape says a stretch of a row is solid, or empty, the
+//! answer is known without the distance. That saves nearly all the work,
+//! because a panel is almost all solid background. The tests compare every
+//! pixel with the plain evaluation of every pixel, so the stretches are
+//! never allowed to change a byte.
 
-use crate::scene::{Point, Shape};
+use std::ops::Range;
+
+use crate::scene::{Point, Rgba};
+use crate::shapes::Shape;
 
 /// `px` is premultiplied BGRA, because that is the byte layout of `wl_shm`'s
 /// ARGB8888 on little-endian machines: the engine draws straight into a
@@ -13,13 +18,10 @@ use crate::scene::{Point, Shape};
 ///
 /// # Panics
 ///
-/// If `px` is shorter than `w * h * 4` bytes and a shape reaches the missing
-/// part.
+/// If `px` is shorter than `w * h * 4` bytes.
 pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Shape>]) {
-    // Shared-memory pools hand back buffers that still hold an earlier frame.
-    px.fill(0);
-    // Whole pixels keep byte offsets out of the loop below.
-    let (px, _) = px.as_chunks_mut::<4>();
+    // Whole pixels keep byte offsets out of the loops below.
+    let (px, _) = px[..w * h * 4].as_chunks_mut::<4>();
     // Coverage ramps across one physical pixel centred on the edge: cheap
     // antialiasing without supersampling.
     let cover = |d: f32| (0.5 - d * scale).clamp(0.0, 1.0);
@@ -30,49 +32,121 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
     let span = |lo: f32, hi: f32, n: usize| {
         let end = (((hi + pad) * scale - 0.5).ceil().max(0.0) as usize).min(n);
         let start = (((lo - pad) * scale - 0.5).ceil().max(0.0) as usize).min(end);
-        (start, end)
+        start..end
     };
+    // A pixel is fully covered, or not at all, once its centre is half a
+    // physical pixel from the edge. The extra 1/64 of a pixel keeps rounding
+    // in `inside` and `hole` from claiming a pixel that `distance` covers to
+    // 0.9999; such a pixel takes the slow way instead.
+    let depth = (0.5 + 1.0 / 64.0) / scale;
+    let centres = |stretch: Option<[f32; 2]>, columns: &Range<usize>| match stretch {
+        Some([a, b]) => {
+            let start = (a * scale - 0.5).ceil().max(columns.start as f32) as usize;
+            let start = start.min(columns.end);
+            let end = ((b * scale - 0.5).floor() + 1.0).clamp(start as f32, columns.end as f32);
+            start..end as usize
+        }
+        None => columns.start..columns.start,
+    };
+    let boxes: Vec<_> = shapes
+        .iter()
+        .map(|s| {
+            let [p0, p1] = s.bounds();
+            (span(p0.x, p1.x, w), span(p0.y, p1.y, h))
+        })
+        .collect();
 
-    for s in shapes {
-        let [p0, p1] = s.bounds();
-        let (x0, x1) = span(p0.x, p1.x, w);
-        let (y0, y1) = span(p0.y, p1.y, h);
-
-        let c = s.color();
-        // Channels stay in 0..=255 so blending needs no rescaling per pixel.
-        let [red, green, blue] = [c.r, c.g, c.b].map(f32::from);
-        let opacity = c.a as f32 / 255.0;
-
-        for y in y0..y1 {
-            // Pixels are sampled at their centres, so edges on whole logical
-            // pixels stay crisp at whole-number scales.
-            let py = (y as f32 + 0.5) / scale;
-            // Walking the slice spares a bounds check per pixel.
-            let row = &mut px[y * w + x0..y * w + x1];
-            for (x, bytes) in (x0..).zip(row) {
+    // Row by row, with every shape that crosses the row, so that the row
+    // stays in the cache while they are drawn on it. Shape by shape over the
+    // whole buffer, a frame would pass through memory once for every
+    // full-screen shape in it.
+    for (y, row) in px.chunks_exact_mut(w).enumerate() {
+        // Shared-memory pools hand back buffers that still hold an earlier
+        // frame.
+        row.fill([0; 4]);
+        // Pixels are sampled at their centres, so edges on whole logical
+        // pixels stay crisp at whole-number scales.
+        let py = (y as f32 + 0.5) / scale;
+        for (s, (columns, rows)) in shapes.iter().zip(&boxes) {
+            if !rows.contains(&y) {
+                continue;
+            }
+            let c = s.color();
+            let opacity = c.a as f32 / 255.0;
+            let solid = centres(s.inside(py, depth), columns);
+            let hole = centres(s.hole(py, depth), columns);
+            for x in around(columns.clone(), [solid.clone(), hole]) {
                 let p = Point::new((x as f32 + 0.5) / scale, py);
                 let alpha = cover(s.distance(p)) * opacity;
-                if alpha <= 0.0 {
-                    continue;
+                if alpha > 0.0 {
+                    blend(&mut row[x], c, alpha);
                 }
-
-                // Premultiplied source-over, because it needs no division
-                // per pixel.
-                let keep = 1.0 - alpha;
-                let blend = |new: f32, curr: u8| (new * alpha + curr as f32 * keep + 0.5) as u8;
-                bytes[0] = blend(blue, bytes[0]);
-                bytes[1] = blend(green, bytes[1]);
-                bytes[2] = blend(red, bytes[2]);
-                bytes[3] = (alpha * 255.0 + bytes[3] as f32 * keep + 0.5) as u8;
             }
+            fill(&mut row[solid], c);
         }
     }
+}
+
+/// Premultiplied source-over, because it needs no division per pixel.
+/// Channels stay in 0..=255 so blending needs no rescaling either.
+fn blend(bytes: &mut [u8; 4], c: Rgba, alpha: f32) {
+    let keep = 1.0 - alpha;
+    let mix = |new: u8, curr: u8| (new as f32 * alpha + curr as f32 * keep + 0.5) as u8;
+    *bytes = [
+        mix(c.b, bytes[0]),
+        mix(c.g, bytes[1]),
+        mix(c.r, bytes[2]),
+        mix(255, bytes[3]),
+    ];
+}
+
+/// Only for pixels the shape covers fully, because it takes the colour's
+/// own opacity as the alpha of every one of them.
+fn fill(pixels: &mut [[u8; 4]], c: Rgba) {
+    if c.a == 255 {
+        // Nothing of what was underneath remains, which is what `blend`
+        // computes, only slower.
+        pixels.fill([c.b, c.g, c.r, 255]);
+        return;
+    }
+    // In integers, which the compiler vectorises where it does not
+    // vectorise `blend`: a full-screen translucent layer takes 3 ms instead
+    // of 18. With one alpha for all pixels, the results are exactly those of
+    // `blend`, which a test checks for every byte.
+    let a = u16::from(c.a);
+    let src = [c.b, c.g, c.r, 255].map(|v| u16::from(v) * a);
+    for p in pixels {
+        for k in 0..4 {
+            p[k] = div255(src[k] + u16::from(p[k]) * (255 - a));
+        }
+    }
+}
+
+/// `x / 255`, rounded half up, without a division; exact for every `x` up
+/// to 255 * 255.
+fn div255(x: u16) -> u8 {
+    let x = x + 128;
+    ((x + (x >> 8)) >> 8) as u8
+}
+
+/// The pixels of `row` outside both cuts. Either cut may be empty, and an
+/// empty one can sit anywhere, even at the start of the other; ordering
+/// them by their start alone would then send pixels of the solid stretch
+/// through `distance` as well and blend them twice.
+fn around(row: Range<usize>, mut cuts: [Range<usize>; 2]) -> impl Iterator<Item = usize> {
+    cuts.sort_by_key(|cut| cut.start);
+    let [a, b] = cuts;
+    let after_a = a.end.max(row.start);
+    (row.start..a.start)
+        .chain(after_a..b.start.max(after_a))
+        .chain(b.end.max(after_a)..row.end)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Circle, Rect, Rgba, Scene};
+    use crate::scene::{Rgba, Scene};
+    use crate::shapes::{Circle, Rect};
 
     /// A fresh buffer for every query, so that no test can depend on what
     /// another left behind.
@@ -92,6 +166,151 @@ mod tests {
 
     fn white() -> Rgba {
         Rgba::from_hex(0xffffff, 1.0)
+    }
+
+    /// Every pixel of the buffer through `distance`, with nothing skipped and
+    /// no bounds: the definition of what `draw` produces.
+    fn reference(px: &mut [u8], w: usize, scale: f32, shapes: &[Box<dyn Shape>]) {
+        px.fill(0);
+        let (px, _) = px.as_chunks_mut::<4>();
+        for s in shapes {
+            let c = s.color();
+            let [red, green, blue] = [c.r, c.g, c.b].map(f32::from);
+            let opacity = c.a as f32 / 255.0;
+            for (i, bytes) in px.iter_mut().enumerate() {
+                let (x, y) = ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+                let d = s.distance(Point::new(x / scale, y / scale));
+                let alpha = (0.5 - d * scale).clamp(0.0, 1.0) * opacity;
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let keep = 1.0 - alpha;
+                let mix = |new: f32, curr: u8| (new * alpha + curr as f32 * keep + 0.5) as u8;
+                *bytes = [
+                    mix(blue, bytes[0]),
+                    mix(green, bytes[1]),
+                    mix(red, bytes[2]),
+                    (alpha * 255.0 + bytes[3] as f32 * keep + 0.5) as u8,
+                ];
+            }
+        }
+    }
+
+    /// xorshift, so that the scenes are random but the same on every run,
+    /// and a failure can be reproduced.
+    struct Dice(u32);
+
+    impl Dice {
+        fn roll(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            self.0 as f32 / u32::MAX as f32
+        }
+
+        fn between(&mut self, lo: f32, hi: f32) -> f32 {
+            lo + (hi - lo) * self.roll()
+        }
+
+        /// Half the time on the half-pixel grid, because edges on whole
+        /// pixels put pixel centres exactly at the depth the stretches are
+        /// cut at, which is where rounding would show.
+        fn coordinate(&mut self, lo: f32, hi: f32) -> f32 {
+            let v = self.between(lo, hi);
+            if self.roll() < 0.5 {
+                (v * 2.0).round() / 2.0
+            } else {
+                v
+            }
+        }
+    }
+
+    fn random_shape(dice: &mut Dice, (w, h): (f32, f32)) -> Box<dyn Shape> {
+        let opacity = if dice.roll() < 0.5 { 1.0 } else { dice.roll() };
+        let channel = |dice: &mut Dice| (dice.roll() * 255.0) as u8;
+        let color = Rgba::from_rgb(channel(dice), channel(dice), channel(dice), opacity);
+        let (x, y) = (
+            dice.coordinate(-5.0, w + 5.0),
+            dice.coordinate(-5.0, h + 5.0),
+        );
+        let (dx, dy) = (
+            dice.coordinate(0.0, w / 2.0),
+            dice.coordinate(0.0, h / 2.0 + 2.0),
+        );
+        let rect = rect(x - dx, y - dy, x + dx, y + dy, color);
+        let circle = Circle {
+            center: Point::new(x, y),
+            r: dice.coordinate(0.5, h.max(4.0)),
+            color,
+        };
+        let width = dice.coordinate(0.5, 4.0);
+        match (dice.roll() * 4.0) as u32 {
+            0 => Box::new(rect),
+            1 => Box::new(circle),
+            2 => Box::new(rect.outline(width, color)),
+            _ => Box::new(circle.outline(width, color)),
+        }
+    }
+
+    #[test]
+    fn integer_blending_rounds_exactly_as_float_blending() {
+        let under: Vec<[u8; 4]> = (0..=255).map(|v| [v; 4]).collect();
+        for a in 0..=255 {
+            for v in 0..=255 {
+                let c = Rgba {
+                    r: v,
+                    g: v,
+                    b: v,
+                    a,
+                };
+                let mut filled = under.clone();
+                fill(&mut filled, c);
+                let mut blended = under.clone();
+                blended
+                    .iter_mut()
+                    .for_each(|p| blend(p, c, a as f32 / 255.0));
+                assert_eq!(filled, blended, "colour {v}, opacity {a}");
+            }
+        }
+    }
+
+    #[test]
+    fn around_leaves_out_both_cuts_however_they_lie() {
+        let pixels = |cuts| around(0..10, cuts).collect::<Vec<_>>();
+        assert_eq!(pixels([2..4, 6..8]), [0, 1, 4, 5, 8, 9]);
+        assert_eq!(pixels([0..10, 0..0]), []);
+        assert_eq!(pixels([0..0, 0..10]), []);
+        assert_eq!(pixels([2..8, 5..5]), [0, 1, 8, 9]);
+        assert_eq!(pixels([2..6, 4..8]), [0, 1, 8, 9]);
+        assert_eq!(pixels([0..0, 0..0]), (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn solid_and_empty_stretches_change_no_pixel() {
+        let mut dice = Dice(0x9e37_79b9);
+        // The wide strip puts edges thousands of pixels from the origin,
+        // where `f32` rounds the most.
+        for (w, h) in [(37, 23), (64, 48), (3900, 3)] {
+            for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+                for _ in 0..40 {
+                    let size = (w as f32 / scale, h as f32 / scale);
+                    let shapes: Vec<_> = (0..4).map(|_| random_shape(&mut dice, size)).collect();
+                    let (mut fast, mut slow) = (vec![0; w * h * 4], vec![0; w * h * 4]);
+                    draw(&mut fast, w, h, scale, &shapes);
+                    reference(&mut slow, w, scale, &shapes);
+                    let (fast, slow) = (fast.as_chunks::<4>().0, slow.as_chunks::<4>().0);
+                    if let Some(i) = (0..w * h).find(|&i| fast[i] != slow[i]) {
+                        panic!(
+                            "{w}x{h} at {scale}, pixel ({}, {}): {:?} where the reference has {:?}",
+                            i % w,
+                            i / w,
+                            fast[i],
+                            slow[i]
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -141,8 +360,8 @@ mod tests {
 
     #[test]
     fn an_opaque_shape_replaces_what_is_underneath() {
-        // A fast path for solid interiors would write the colour directly;
-        // this is the result it has to match.
+        // The middle lies in the solid stretch, where the colour is written
+        // without blending; this is the result blending has to agree with.
         let mut s = Scene::new();
         s.push(rect(0.0, 0.0, 10.0, 10.0, Rgba::from_hex(0x0000ff, 1.0)));
         s.push(rect(0.0, 0.0, 10.0, 10.0, Rgba::from_hex(0xff0000, 1.0)));
