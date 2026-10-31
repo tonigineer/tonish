@@ -9,8 +9,13 @@ use renderer::{Circle, Point, Rect, Scene, Shape};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
+/// The monitor name of a screen for every monitor that has no screen of
+/// its own, so that a screen named after a monitor always wins over it.
 pub const EVERY: &str = "*";
+/// Logical pixels along the panel before its first component and after its
+/// last.
 pub const END: f32 = 8.0;
+/// Logical pixels along the panel between two components.
 pub const GAP: f32 = 4.0;
 
 pub struct Shell {
@@ -30,6 +35,7 @@ pub struct Screen {
 pub struct Panel {
     pub anchor: Anchor,
     pub orientation: Orientation,
+    /// Logical pixels across the panel.
     pub thickness: f32,
     pub components: Vec<Component>,
 }

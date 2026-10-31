@@ -1,0 +1,21 @@
+[book]
+title = "tonish"
+description = "A desktop shell for Wayland: panels on every monitor."
+authors = ["Toni Lubiniecki"]
+language = "en"
+src = "src"
+
+# Instead of mdBook's default `book`, which would put the output at
+# book/book.
+[build]
+build-dir = "build"
+# Otherwise mdBook writes an empty page into src/ for every page SUMMARY.md
+# lists without a file, and the build passes.
+create-missing = false
+
+[output.html]
+# GitHub Pages serves the book under /tonish/, and mdBook's 404 page, which
+# can turn up at any path, finds its styles and scripts only through this.
+site-url = "/tonish/"
+git-repository-url = "https://github.com/tonigineer/tonish"
+edit-url-template = "https://github.com/tonigineer/tonish/edit/main/book/{path}"
