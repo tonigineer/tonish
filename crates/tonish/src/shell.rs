@@ -49,6 +49,8 @@ pub enum Component {
 
 impl Default for Shell {
     fn default() -> Self {
+        // todo!("write default config");
+
         Self {
             screens: vec![Screen {
                 monitor: EVERY.into(),
