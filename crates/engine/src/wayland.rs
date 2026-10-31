@@ -24,6 +24,9 @@ use wayland_client::{
 
 use crate::app::{App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
 
+/// Returns only when something fails: nothing ends the event loop yet, so
+/// `Ok` never comes back. The errors are strings, because the only thing a
+/// caller does with them is print them.
 pub fn run(app: Box<dyn App>) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("no Wayland display: {e}"))?;
     let (globals, queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
@@ -92,6 +95,8 @@ impl Engine {
             size: info
                 .logical_size
                 .map_or((1920.0, 1080.0), |(w, h)| (w as f32, h as f32)),
+            // sctk starts at 1, but a compositor sending 0 would make every
+            // buffer zero-sized, which is a protocol error.
             scale: info.scale_factor.max(1),
         };
         let specs = self.app.surfaces(&out);
@@ -130,6 +135,8 @@ impl Engine {
         layer.set_exclusive_zone(spec.exclusive);
         let m = spec.margin;
         layer.set_margin(m.0, m.1, m.2, m.3);
+        // Panels take no keys yet, and any other mode lets them take the
+        // keyboard focus away from windows.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
         Surface {
@@ -239,6 +246,8 @@ impl OutputHandler for Engine {
 }
 
 impl LayerShellHandler for Engine {
+    /// The compositor closes a layer surface mainly when its output goes
+    /// away, so the whole output is dropped instead of a single surface.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if let Some((oi, _)) = self.find_layer(layer) {
             self.outs.remove(oi);
@@ -246,7 +255,9 @@ impl LayerShellHandler for Engine {
     }
 
     /// The compositor sends 0 along an axis it leaves to the client, so the
-    /// spec's own size stands there.
+    /// spec's own size stands there. A configure may repeat the size the
+    /// surface already has, which is not worth a redraw. sctk has
+    /// acknowledged the configure already.
     fn configure(
         &mut self,
         _: &Connection,

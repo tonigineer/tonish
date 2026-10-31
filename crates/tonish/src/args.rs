@@ -6,6 +6,7 @@ use clap::Parser;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use crate::config;
 use crate::shell::Shell;
 
 // clap turns the doc comments below into `--help`, so they are written for
@@ -21,17 +22,6 @@ pub struct Args {
     /// Read the settings from FILE [default: $XDG_CONFIG_HOME/tonish/config.toml]
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
-}
-
-impl Args {
-    fn config_path(&self) -> Option<PathBuf> {
-        self.config.clone().or_else(|| {
-            default_config(
-                std::env::var_os("XDG_CONFIG_HOME"),
-                std::env::var_os("HOME"),
-            )
-        })
-    }
 }
 
 /// Follows the XDG base directory spec, as sway and waybar do, including its
@@ -50,20 +40,34 @@ fn default_config(xdg_config_home: Option<OsString>, home: Option<OsString>) -> 
 }
 
 /// A file named with `--config` has to exist, because running with the
-/// built-in settings instead would hide a typo in its path. The default file
-/// may be missing, as it is on a first start, and then the built-in settings
-/// apply.
+/// built-in settings instead would hide a typo in its path.
 ///
-/// Reading the file comes next: until then, a file that exists still gives
-/// [`Shell::default`].
+/// The default file is written on a first start, so that there is a file to
+/// edit. If that fails, as on a read-only home, tonish still starts with the
+/// built-in settings: a shell that does not come up is worse than one with
+/// the default panel. A broken file, though, is an error, because quietly
+/// falling back would look as if the edits had been ignored.
 pub fn load(args: Args) -> Result<Shell, String> {
-    match args.config_path() {
-        Some(path) if path.exists() => Ok(Shell::default()),
-        Some(path) if args.config.is_some() => {
-            Err(format!("config file does not exist: {}", path.display()))
-        }
-        _ => Ok(Shell::default()),
+    if let Some(path) = args.config {
+        return config::read(&path).map(Shell::new);
     }
+    let home = default_config(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    );
+    let Some(path) = home else {
+        return Ok(Shell::default());
+    };
+    if let Err(e) = config::install(&path)
+        && e.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        eprintln!(
+            "tonish: {}: {e}; using the built-in settings",
+            path.display()
+        );
+        return Ok(Shell::default());
+    }
+    config::read(&path).map(Shell::new)
 }
 
 #[cfg(test)]

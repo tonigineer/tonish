@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use crate::config::Config;
+use crate::theme::Theme;
 use engine::{self, App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
 use renderer::{Circle, Point, Rect, Scene, Shape};
-
-use crate::theme::Theme;
+use serde::Deserialize;
 
 pub const EVERY: &str = "*";
 pub const END: f32 = 8.0;
@@ -27,7 +28,8 @@ pub struct Panel {
     pub components: Vec<Component>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Orientation {
     Horizontal,
     Vertical,
@@ -49,15 +51,27 @@ pub enum Component {
 
 impl Default for Shell {
     fn default() -> Self {
-        // todo!("write default config");
+        Self::new(Config::default())
+    }
+}
 
+impl Shell {
+    /// The layout stays in code until the settings file describes it; the
+    /// file only picks the orientation and thickness of the one panel. The
+    /// left and top edges are where a panel of either orientation spans the
+    /// monitor and keeps windows clear of it.
+    pub fn new(config: Config) -> Self {
+        let anchor = match config.orientation {
+            Orientation::Horizontal => Anchor::Top,
+            Orientation::Vertical => Anchor::Left,
+        };
         Self {
             screens: vec![Screen {
                 monitor: EVERY.into(),
                 panels: vec![Panel {
-                    anchor: Anchor::Top,
-                    orientation: Orientation::Horizontal,
-                    thickness: 44.0,
+                    anchor,
+                    orientation: config.orientation,
+                    thickness: config.thickness,
                     components: vec![Component::Logo],
                 }],
             }],
@@ -65,9 +79,7 @@ impl Default for Shell {
             monitors: HashMap::new(),
         }
     }
-}
 
-impl Shell {
     pub fn screen(&self, monitor: Option<&str>) -> Option<&Screen> {
         let named = monitor.and_then(|m| self.screens.iter().find(|s| s.monitor == m));
         named.or_else(|| self.screens.iter().find(|s| s.monitor == EVERY))

@@ -4,6 +4,7 @@ folders and runtime folder, so that scenarios cannot affect each other or the
 real desktop. It has two 3840×2160 monitors at scale 2, so that bugs with
 several monitors or with scaling show up.
 """
+
 import json
 import os
 import shutil
@@ -57,24 +58,55 @@ class Desktop:
         run.mkdir(mode=0o700)
         keep = ("PATH", "LANG", "USER", "LOGNAME")
         self.env = {k: v for k, v in os.environ.items() if k in keep}
-        self.env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_RUNTIME_DIR=str(run))
+        self.env.update(
+            HOME=str(home),
+            XDG_CONFIG_HOME=str(home / ".config"),
+            XDG_RUNTIME_DIR=str(run),
+        )
         (self.dir / "sway.conf").write_text(SWAY.format(dir=self.dir))
-        self.sway = subprocess.Popen(["sway", "-c", str(self.dir / "sway.conf")],
-                                     env=dict(self.env, WLR_BACKENDS="headless", WLR_HEADLESS_OUTPUTS="2",
-                                              WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman"),
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if wait_for(lambda: (self.dir / "display").exists() and (self.dir / "display").read_text(), 10) is None:
+        self.sway = subprocess.Popen(
+            ["sway", "-c", str(self.dir / "sway.conf")],
+            env=dict(
+                self.env,
+                WLR_BACKENDS="headless",
+                WLR_HEADLESS_OUTPUTS="2",
+                WLR_LIBINPUT_NO_DEVICES="1",
+                WLR_RENDERER="pixman",
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if (
+            wait_for(
+                lambda: (
+                    (self.dir / "display").exists()
+                    and (self.dir / "display").read_text()
+                ),
+                10,
+            )
+            is None
+        ):
             raise SystemExit("sway did not start")
         self.env["WAYLAND_DISPLAY"] = (self.dir / "display").read_text()
         socks = list(run.glob(f"sway-ipc.*.{self.sway.pid}.sock"))
         self.env["SWAYSOCK"] = str(socks[0]) if socks else ""
         self.log = open(self.dir / "tonish.log", "w")
-        self.tonish = subprocess.Popen([str(TONISH)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
+        self.tonish = subprocess.Popen(
+            [str(TONISH)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT
+        )
 
     def workspaces(self):
         """Relative to each monitor, because sway reports positions in the layout of all of them."""
-        run = lambda what: json.loads(subprocess.run(["swaymsg", "-t", what, "-r"], env=self.env,
-                                                     capture_output=True, text=True, check=False).stdout or "[]")
+        run = lambda what: json.loads(
+            subprocess.run(
+                ["swaymsg", "-t", what, "-r"],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            or "[]"
+        )
         at = {o["name"]: o["rect"] for o in run("get_outputs")}
         out = []
         for w in run("get_workspaces"):
@@ -84,8 +116,12 @@ class Desktop:
 
     def pixels(self):
         """Captured at scale 1, so that scenarios address pixels in logical coordinates."""
-        ppm = subprocess.run(["grim", "-o", "HEADLESS-2", "-s", "1", "-t", "ppm", "-"], env=self.env,
-                             capture_output=True, check=False).stdout
+        ppm = subprocess.run(
+            ["grim", "-o", "HEADLESS-2", "-s", "1", "-t", "ppm", "-"],
+            env=self.env,
+            capture_output=True,
+            check=False,
+        ).stdout
         if not ppm.startswith(b"P6"):
             return 0, b""
         _, rest = ppm.split(b"\n", 1)
@@ -96,12 +132,16 @@ class Desktop:
     def at(self, x, y):
         w, px = self.pixels()
         i = (y * w + x) * 3
-        return tuple(px[i:i + 3])
+        return tuple(px[i : i + 3])
 
     def shot(self, name):
         OUT.mkdir(exist_ok=True)
-        subprocess.run(["grim", "-o", "HEADLESS-2", "-s", "0.5", str(OUT / f"{name}.png")], env=self.env,
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["grim", "-o", "HEADLESS-2", "-s", "0.5", str(OUT / f"{name}.png")],
+            env=self.env,
+            capture_output=True,
+            check=False,
+        )
 
     def logged(self):
         self.log.flush()
@@ -138,24 +178,47 @@ def local(f):
 
 # ── Scenarios ───────────────────────────────────────────────────────────────
 
+
 @scenario
 def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
     def kept(rooms):
-        return len(rooms) == 2 and all(x == 0 and y > 0 and w == 1920 and y + h == 1080 for x, y, w, h in rooms)
-    check(wait_for(lambda: kept(d.workspaces()), 3.0) is not None, f"room for windows: {d.workspaces()}")
+        return len(rooms) == 2 and all(
+            x == 0 and y > 0 and w == 1920 and y + h == 1080 for x, y, w, h in rooms
+        )
+
+    check(
+        wait_for(lambda: kept(d.workspaces()), 3.0) is not None,
+        f"room for windows: {d.workspaces()}",
+    )
     check(d.tonish.poll() is None, f"tonish exited with {d.tonish.returncode}")
+
+
+def tonish_writes_its_settings_on_first_start(d):
+    written = d.dir / "home" / ".config" / "tonish" / "config.toml"
+    shipped = (ROOT / "assets" / "default-config.toml").read_text()
+    check(
+        wait_for(lambda: written.exists() and written.read_text() == shipped, 3.0)
+        is not None,
+        f"{written} is missing or differs from assets/default-config.toml",
+    )
 
 
 @local
 def the_bar_is_44_px_high(d):
     want = [(0, 44, 1920, 1080 - 44)] * 2
-    check(wait_for(lambda: d.workspaces() == want, 3.0) is not None, f"room for windows: {d.workspaces()}")
+    check(
+        wait_for(lambda: d.workspaces() == want, 3.0) is not None,
+        f"room for windows: {d.workspaces()}",
+    )
 
 
 @local
 def the_bar_is_drawn_with_its_logo(d):
-    surface, primary = (0x11, 0x13, 0x18), (0xc9, 0xa9, 0x6e)
-    check(wait_for(lambda: near(d.at(200, 22), surface), 3.0) is not None, f"the bar at (200, 22): {d.at(200, 22)}")
+    surface, primary = (0x11, 0x13, 0x18), (0xC9, 0xA9, 0x6E)
+    check(
+        wait_for(lambda: near(d.at(200, 22), surface), 3.0) is not None,
+        f"the bar at (200, 22): {d.at(200, 22)}",
+    )
     check(near(d.at(24, 22), primary), f"the logo's dot at (24, 22): {d.at(24, 22)}")
     check(not near(d.at(200, 60), surface), "the bar reaches past 44 px")
 
