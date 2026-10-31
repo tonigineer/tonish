@@ -3,7 +3,6 @@ resolver = "3"
 members = ["crates/renderer", "crates/engine", "crates/tonish"]
 
 [workspace.package]
-# name = "tonish"
 version = "0.0.2"
 edition = "2024"
 

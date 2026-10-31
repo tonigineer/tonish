@@ -44,9 +44,9 @@ pub enum Layer {
 /// documentation applies field by field.
 #[derive(Clone, Debug)]
 pub struct SurfaceSpec {
-    /// Becomes the layer surface's namespace, which compositors match in
-    /// rules such as sway's `layer_effects`, so renaming it breaks those
-    /// rules in users' configs.
+    /// Becomes the layer surface's namespace, behind a prefix the engine
+    /// adds. Compositors match namespaces in rules such as sway's
+    /// `layer_effects`, so renaming it breaks those rules in users' configs.
     pub name: &'static str,
     pub layer: Layer,
     pub anchor: Anchor,
@@ -75,7 +75,8 @@ pub struct Paint<'a> {
 /// Keeps the shell free of Wayland: it only says which surfaces it wants
 /// and what is on them, so all of it can be tested without a compositor.
 pub trait App {
-    /// Called once, when the output appears. Returning no surfaces leaves the
+    /// Called when the output appears, and for every output again after
+    /// [`App::changed`] returns `true`. Returning no surfaces leaves the
     /// monitor without any.
     fn surfaces(&mut self, output: &Output) -> Vec<SurfaceSpec>;
 
@@ -123,8 +124,8 @@ pub trait App {
 /// `quit` is part of the reply rather than a call the app makes, because the
 /// app has no hold on the event loop, which is what keeps it testable.
 pub struct Reply {
-    /// One line. Clients read up to the end of the connection, so a reply
-    /// that is cut short only happens when the shell dies.
+    /// One line, like the message. No length goes with it, because clients
+    /// read until the connection closes.
     pub text: String,
     pub quit: bool,
 }

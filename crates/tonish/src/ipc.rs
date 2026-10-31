@@ -32,8 +32,8 @@ impl Message {
     }
 }
 
-/// One socket per Wayland display, because a nested session or a second
-/// seat runs a tonish of its own. `$XDG_RUNTIME_DIR` is private to the user
+/// One socket per Wayland display, because every compositor, a nested one
+/// included, runs a tonish of its own. `$XDG_RUNTIME_DIR` is private to the user
 /// and cleared at logout, which is what a socket needs; without it there is
 /// nowhere safe to put one. libwayland falls back to `wayland-0` when
 /// `$WAYLAND_DISPLAY` is unset, and so does this. The variables are passed

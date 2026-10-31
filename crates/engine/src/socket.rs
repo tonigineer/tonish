@@ -4,7 +4,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 /// Removes the socket file when dropped, so that it goes on every way out of
-/// `run`, errors included, and clients never find a file nobody listens on.
+/// `run`, errors and panics included. Only SIGKILL leaves it behind, and
+/// [`listen`] replaces it on the next start.
 pub struct Socket {
     path: PathBuf,
 }

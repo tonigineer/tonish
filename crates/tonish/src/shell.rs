@@ -89,9 +89,9 @@ impl Shell {
 }
 
 /// The layout stays in code until the settings file describes it; the file
-/// only picks the orientation and thickness of the one panel. The left and
-/// top edges are where a panel of either orientation spans the monitor and
-/// keeps windows clear of it.
+/// only picks the orientation and thickness of the one panel. Each
+/// orientation goes to an edge it spans the monitor along, so that the panel
+/// reserves its room and windows stay clear of it.
 fn layout(config: Config) -> Vec<Screen> {
     let anchor = match config.orientation {
         Orientation::Horizontal => Anchor::Top,
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(specs.len(), 2);
         let l = engine::Anchor::LEFT | engine::Anchor::TOP | engine::Anchor::BOTTOM;
         assert_eq!((specs[0].anchor, specs[0].size), (l, (44, 0)));
-        // 8 + 32 + 4 + 32 + 8 long, floating in the middle, reserving nothing.
+        // 84 is 8 + 32 + 4 + 32 + 8: both ends, two logos and the gap between them.
         assert_eq!(specs[1].anchor, engine::Anchor::empty());
         assert_eq!((specs[1].size, specs[1].exclusive), ((84, 32), 0));
         assert_eq!(

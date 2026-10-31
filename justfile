@@ -47,7 +47,7 @@ test:
     cargo nextest run --workspace --release --no-tests=pass
     cargo test --workspace --release --doc
 
-[doc("Lint, then test: what a pull request checks, short of the desktop scenarios.")]
+[doc("Lint, then test: the code checks of a pull request, short of the desktop scenarios.")]
 [group("check")]
 check: lint test
 
@@ -57,7 +57,7 @@ desktop filter="":
     cargo build --release -p tonish
     python3 tests/desktop/run.py {{ filter }}
 
-[doc("Everything a pull request checks: check, then the desktop scenarios.")]
+[doc("All the code checks of a pull request: check, then the desktop scenarios.")]
 [group("check")]
 check-all: check desktop
 

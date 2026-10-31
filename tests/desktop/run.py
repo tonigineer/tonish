@@ -177,7 +177,7 @@ def local(f):
     return f
 
 
-# ── Scenarios ───────────────────────────────────────────────────────────────
+# ── Scenarios ─────────────────────────────────────────────────────────────────
 
 
 @scenario
@@ -210,8 +210,8 @@ def settings_file(d):
 
 
 def panels_up(d):
-    """Once the panels reserve room, the engine is past setting up its watch,
-    so an edit from here on cannot be missed."""
+    """Once the panels reserve room, the engine is past setting up its socket
+    and its watch, so a message or an edit from here on cannot be missed."""
 
     def up(rooms):
         return len(rooms) == 2 and all(y > 0 or x > 0 for x, y, w, h in rooms)

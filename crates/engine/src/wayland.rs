@@ -369,7 +369,7 @@ impl Engine {
     }
 }
 
-// ── Wayland handlers ─────────────────────────────────────────────────────
+// ── Wayland handlers ─────────────────────────────────────────────────────────
 
 impl CompositorHandler for Engine {
     fn scale_factor_changed(
