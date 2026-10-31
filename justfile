@@ -24,7 +24,7 @@ check: && test
 build args="":
     cargo build {{ args }}
 
-[group("build")]
+[group("run")]
 [doc("Run tonish.")]
 run args="":
     cargo run --release -- {{ args }}
