@@ -10,8 +10,14 @@ edition = "2024"
 [workspace.dependencies]
 renderer = { path = "crates/renderer" }
 engine = { path = "crates/engine" }
-criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8.2", default-features = false, features = [
+    "cargo_bench_support",
+] }
 png = "0.18.1"
+smithay-client-toolkit = { version = "0.19.2", default-features = false, features = [
+    "calloop",
+] }
+wayland-client = "0.31"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
