@@ -1,7 +1,7 @@
-# Every push to main whose version has not been released yet becomes a
-# GitHub release tagged vX.Y.Z, with the package the build makes. A push
-# that keeps the version, such as a merged fix/* branch, releases nothing:
-# its changes go out with the next version that is raised.
+# Releasing whenever main has a new version, instead of on tags pushed by
+# hand, makes a merge all it takes to ship. A push that keeps the version,
+# such as a merged fix/* branch, releases nothing: its changes go out with the
+# next version that is raised.
 name: Release
 
 on:

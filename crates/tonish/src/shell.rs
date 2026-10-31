@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use engine::{self, App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
-use renderer::{Circle, Point, Rect, Scene, Shape};
-
+use crate::config::{self, Config};
+use crate::ipc::{self, Message};
 use crate::theme::Theme;
+use engine::{self, App, Layer, Output, OutputId, Paint, Reply, SurfaceId, SurfaceSpec};
+use renderer::{Circle, Point, Rect, Scene, Shape};
+use serde::Deserialize;
+use tracing::{debug, info, warn};
 
 pub const EVERY: &str = "*";
 pub const END: f32 = 8.0;
@@ -12,6 +16,9 @@ pub const GAP: f32 = 4.0;
 pub struct Shell {
     pub screens: Vec<Screen>,
     pub theme: Theme,
+    /// Kept to tell a save that changes something from one that does not.
+    config: Config,
+    file: Option<PathBuf>,
     monitors: HashMap<OutputId, Option<String>>,
 }
 
@@ -27,7 +34,8 @@ pub struct Panel {
     pub components: Vec<Component>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Orientation {
     Horizontal,
     Vertical,
@@ -49,27 +57,57 @@ pub enum Component {
 
 impl Default for Shell {
     fn default() -> Self {
-        Self {
-            screens: vec![Screen {
-                monitor: EVERY.into(),
-                panels: vec![Panel {
-                    anchor: Anchor::Top,
-                    orientation: Orientation::Horizontal,
-                    thickness: 44.0,
-                    components: vec![Component::Logo],
-                }],
-            }],
-            theme: Theme::builtin(),
-            monitors: HashMap::new(),
-        }
+        Self::new(Config::default())
     }
 }
 
 impl Shell {
+    pub fn new(config: Config) -> Self {
+        Self {
+            screens: layout(config),
+            theme: Theme::builtin(),
+            config,
+            file: None,
+            monitors: HashMap::new(),
+        }
+    }
+
+    /// Watches the file it was read from, so that every edit applies without
+    /// a restart. Only the built-in settings, which have no file, go
+    /// unwatched.
+    pub fn read(path: PathBuf) -> Result<Self, String> {
+        let config = config::read(&path)?;
+        info!(file = %path.display(), "settings read");
+        Ok(Self {
+            file: Some(path),
+            ..Self::new(config)
+        })
+    }
+
     pub fn screen(&self, monitor: Option<&str>) -> Option<&Screen> {
         let named = monitor.and_then(|m| self.screens.iter().find(|s| s.monitor == m));
         named.or_else(|| self.screens.iter().find(|s| s.monitor == EVERY))
     }
+}
+
+/// The layout stays in code until the settings file describes it; the file
+/// only picks the orientation and thickness of the one panel. Each
+/// orientation goes to an edge it spans the monitor along, so that the panel
+/// reserves its room and windows stay clear of it.
+fn layout(config: Config) -> Vec<Screen> {
+    let anchor = match config.orientation {
+        Orientation::Horizontal => Anchor::Top,
+        Orientation::Vertical => Anchor::Left,
+    };
+    vec![Screen {
+        monitor: EVERY.into(),
+        panels: vec![Panel {
+            anchor,
+            orientation: config.orientation,
+            thickness: config.thickness,
+            components: vec![Component::Logo],
+        }],
+    }]
 }
 
 impl Panel {
@@ -190,6 +228,49 @@ impl App for Shell {
             panel.draw(paint.scene, paint.size, &self.theme);
         }
     }
+
+    fn watched(&self) -> Vec<PathBuf> {
+        self.file.iter().cloned().collect()
+    }
+
+    /// A broken file keeps the settings from before instead of stopping the
+    /// shell, because editors save half-finished files, and the panels
+    /// disappearing mid-edit would be worse than an edit not applying yet.
+    fn changed(&mut self, path: &Path) -> bool {
+        match config::read(path) {
+            Ok(config) if config == self.config => {
+                debug!(file = %path.display(), "saved without a change");
+                false
+            }
+            Ok(config) => {
+                info!(file = %path.display(), "settings changed");
+                self.config = config;
+                self.screens = layout(config);
+                true
+            }
+            Err(e) => {
+                warn!("keeping the settings from before: {e}");
+                false
+            }
+        }
+    }
+
+    fn socket(&self) -> Option<PathBuf> {
+        ipc::socket_from_env()
+    }
+
+    fn message(&mut self, text: &str) -> Reply {
+        match Message::parse(text) {
+            Some(Message::Quit) => Reply {
+                text: "ok".into(),
+                quit: true,
+            },
+            None => Reply {
+                text: format!("error: unknown message {text:?}"),
+                quit: false,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -242,7 +323,7 @@ mod tests {
         assert_eq!(specs.len(), 2);
         let l = engine::Anchor::LEFT | engine::Anchor::TOP | engine::Anchor::BOTTOM;
         assert_eq!((specs[0].anchor, specs[0].size), (l, (44, 0)));
-        // 8 + 32 + 4 + 32 + 8 long, floating in the middle, reserving nothing.
+        // 84 is 8 + 32 + 4 + 32 + 8: both ends, two logos and the gap between them.
         assert_eq!(specs[1].anchor, engine::Anchor::empty());
         assert_eq!((specs[1].size, specs[1].exclusive), ((84, 32), 0));
         assert_eq!(
@@ -250,5 +331,65 @@ mod tests {
             1,
             "every other monitor: the default"
         );
+    }
+
+    /// One file per test under the system temp dir, so that tests running in
+    /// parallel never share one.
+    fn settings(name: &str, text: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("tonish-{name}-{}.toml", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn only_a_shell_read_from_a_file_watches_it() {
+        assert!(Shell::default().watched().is_empty());
+        let path = settings("watched", config::DEFAULT);
+        let watched = Shell::read(path.clone()).unwrap().watched();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(watched, [path]);
+    }
+
+    #[test]
+    fn an_edit_rebuilds_the_panels() {
+        let path = settings("edit", config::DEFAULT);
+        let mut shell = Shell::read(path.clone()).unwrap();
+        std::fs::write(&path, "orientation = \"vertical\"\nthickness = 30").unwrap();
+        let rebuild = shell.changed(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(rebuild);
+        let panel = &shell.screens[0].panels[0];
+        assert_eq!((panel.anchor, panel.thickness), (Anchor::Left, 30.0));
+    }
+
+    #[test]
+    fn a_save_that_changes_nothing_does_not_rebuild() {
+        let path = settings("same", config::DEFAULT);
+        let rebuild = Shell::default().changed(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(!rebuild);
+    }
+
+    #[test]
+    fn a_broken_edit_keeps_the_settings_from_before() {
+        let path = settings("broken", "orientation = \"vertical\"\nthickness = 0");
+        let mut shell = Shell::default();
+        let rebuild = shell.changed(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(!rebuild);
+        assert_eq!(shell.screens[0].panels[0].anchor, Anchor::Top);
+    }
+
+    #[test]
+    fn quit_is_answered_and_ends_the_shell() {
+        let reply = Shell::default().message("quit");
+        assert_eq!((reply.text.as_str(), reply.quit), ("ok", true));
+    }
+
+    #[test]
+    fn an_unknown_message_is_an_error_and_the_shell_goes_on() {
+        let reply = Shell::default().message("reboot");
+        assert!(reply.text.starts_with("error: "), "{}", reply.text);
+        assert!(!reply.quit);
     }
 }

@@ -1,29 +1,28 @@
-//! toniSH : A wayland desktop shell
-//!
-//!     tonish
-//!     tonish --version
-
+use clap::Parser;
 use std::process::ExitCode;
-use tonish::shell::Shell;
+use tonish::args::{Args, Command, load};
+use tonish::{ipc, logging};
+use tracing::info;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("-v" | "--version") => {
-            println!("toniSH {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
+    let args = Args::parse();
+    let done = match &args.command {
+        Some(Command::Msg { message }) => ipc::socket_from_env()
+            .ok_or_else(|| "XDG_RUNTIME_DIR is not set, so there is no socket to send to".into())
+            .and_then(|socket| ipc::send(&socket, *message)),
+        // Only the running shell logs. `msg` is a short command whose errors
+        // print plainly, as clap's do.
+        None => {
+            logging::init();
+            info!(version = %env!("CARGO_PKG_VERSION"), "starting");
+            load(args).and_then(|shell| engine::run(Box::new(shell)))
         }
-        Some("-h" | "--help") => ExitCode::SUCCESS,
-        None => match engine::run(Box::new(Shell::default())) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("{}", e);
-                ExitCode::FAILURE
-            }
-        },
-        _ => {
-            println!("usage: toniSH [--version]");
-            ExitCode::from(2)
+    };
+    match done {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("tonish: {}", e);
+            ExitCode::FAILURE
         }
     }
 }

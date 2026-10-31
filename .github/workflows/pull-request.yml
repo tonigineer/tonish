@@ -1,7 +1,3 @@
-# Everything a pull request into main has to pass: the version raised, lint,
-# the same test and build as a release, and the general desktop scenarios
-# run on the package that build made.
-#
 # A failing job only blocks merging once it is a required status check in a
 # ruleset or branch protection rule for main. A job skipped by its
 # condition, as "Version raised" is for fix/* branches, counts as passed.
@@ -78,8 +74,8 @@ jobs:
     name: Build
     uses: ./.github/workflows/build.yml
 
-  # Only the general scenarios run here (run.py sees CI set); how panels look
-  # is checked locally. They run the packaged binary, so nothing is compiled.
+  # Runs the packaged binary, so that the scenarios test what a merge would
+  # release and nothing is compiled twice.
   desktop:
     name: Desktop
     needs: build

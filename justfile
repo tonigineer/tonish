@@ -2,7 +2,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 just := just_executable()
 
-# The workspace version, from Cargo.toml on stdin; fails if there is none.
+# `grep .` fails on empty input, so that a missing version stops a recipe
+# instead of comparing as an empty string.
 read_version := "sed -n 's/^version *= *\"\\(.*\\)\"/\\1/p' | grep ."
 
 [doc("List the commands, by group.")]
@@ -20,6 +21,16 @@ run *args:
 [group("develop")]
 build *args:
     cargo build --workspace {{ args }}
+
+# A copy of the release build rather than `cargo install`, so that installing
+# right after `just desktop` compiles nothing, and the binary goes to
+# ~/.local/bin, the user's place for programs in the XDG layout, instead of
+# ~/.cargo/bin.
+[doc("Build tonish for this machine and install it to DIR, or to ~/.local/bin if not given.")]
+[group("develop")]
+install dir="":
+    cargo build --release --locked -p tonish
+    install -Dm755 target/release/tonish "{{ if dir == "" { home_directory() / ".local" / "bin" } else { dir } }}/tonish"
 
 [doc("Format all the code with rustfmt.")]
 [group("develop")]
@@ -46,7 +57,7 @@ test:
     cargo nextest run --workspace --release --no-tests=pass
     cargo test --workspace --release --doc
 
-[doc("Lint, then test: what a pull request checks, short of the desktop scenarios.")]
+[doc("Lint, then test: the code checks of a pull request, short of the desktop scenarios.")]
 [group("check")]
 check: lint test
 
@@ -56,7 +67,7 @@ desktop filter="":
     cargo build --release -p tonish
     python3 tests/desktop/run.py {{ filter }}
 
-[doc("Everything a pull request checks: check, then the desktop scenarios.")]
+[doc("All the code checks of a pull request: check, then the desktop scenarios.")]
 [group("check")]
 check-all: check desktop
 
@@ -107,8 +118,8 @@ bump level:
 version-check ref="origin/main":
     @old=$({{ just }} version {{ ref }}) && new=$({{ just }} version) && {{ just }} _newer "$old" "$new"
 
-# Fails unless NEW is a later version than OLD. sort -V orders plain X.Y.Z
-# correctly, but would put a pre-release such as 1.0.0-rc.1 after 1.0.0.
+# sort -V orders plain X.Y.Z correctly, but would put a pre-release such as
+# 1.0.0-rc.1 after 1.0.0.
 [private]
 [no-exit-message]
 _newer old new:
