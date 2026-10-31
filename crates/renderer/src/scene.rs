@@ -1,21 +1,17 @@
-//! The renderer's description of a frame.
-//!
-//! Shapes are described by their signed distance to their own edge rather
-//! than by pixels or paths. That single quantity yields antialiasing,
-//! outlines and independence from the output scale, and it is exactly what a
-//! GPU fragment shader evaluates, so every backend can rasterise the same
-//! [`Scene`] the same way.
+//! Shapes are signed distances to their own edge rather than pixels or
+//! paths. That one quantity gives antialiasing, outlines and independence
+//! from the output scale, and it is what a GPU fragment shader evaluates, so
+//! every backend can rasterise the same [`Scene`] the same way.
 
-/// A colour with 8-bit channels, opacity included.
+/// 8-bit channels, because that is the precision of the buffers a colour
+/// ends up in. Fractional work such as antialiasing coverage happens per
+/// pixel in the backends, and animations derive a colour from their own
+/// `f32` progress every frame rather than stepping a stored one, so rounding
+/// never accumulates.
 ///
-/// Every channel matches the precision of the buffers it ends up in, so
-/// storing more would gain nothing visible. Fractional work such as
-/// antialiasing coverage happens per pixel in the backends, and animations
-/// derive a colour from their own `f32` progress every frame rather than
-/// stepping a stored one, so rounding never accumulates.
-///
-/// Constructors take the opacity as a fraction in `0.0..=1.0`, which is how
-/// designs and animations express it; values outside are clamped.
+/// Constructors take the opacity as a fraction, because that is how designs
+/// and animations express it. They clamp it, since eased animations
+/// overshoot both ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rgba {
     pub r: u8,
@@ -24,7 +20,6 @@ pub struct Rgba {
     pub a: u8,
 }
 
-/// Converts a fractional opacity to a byte, rounding to the nearest step.
 fn opacity(a: f32) -> u8 {
     (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
@@ -40,8 +35,7 @@ impl Rgba {
     }
 
     /// Takes the opacity separately so that a `0xRRGGBB` literal copied from
-    /// a design tool is never mistaken for `0xAARRGGBB`. Bits above the
-    /// lowest 24 are ignored.
+    /// a design tool is never mistaken for `0xAARRGGBB`.
     pub fn from_hex(hex: u32, a: f32) -> Self {
         let c = |s: u32| ((hex >> s) & 0xff) as u8;
         Self::from_rgb(c(16), c(8), c(0), a)
@@ -56,7 +50,6 @@ impl Rgba {
     }
 }
 
-/// An edge of an output that a bar can be attached to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Orientation {
     #[default]
@@ -67,18 +60,14 @@ pub enum Orientation {
 }
 
 impl Orientation {
-    /// Bars on the left and right run vertically; layout uses this to decide
-    /// which axis is a bar's length and which its thickness.
     pub fn is_vertical(self) -> bool {
         matches!(self, Orientation::Left | Orientation::Right)
     }
 }
 
-/// A position in logical pixels.
-///
-/// Coordinates are `f32` because edges fall between physical pixels, output
-/// scales can be fractional, and animated positions move by fractions of a
-/// pixel.
+/// In logical pixels, so that layout never depends on the output's scale.
+/// `f32`, because edges fall between physical pixels, scales can be
+/// fractional, and animated positions move by fractions of a pixel.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
     pub x: f32,
@@ -91,25 +80,22 @@ impl Point {
     }
 }
 
-/// Anything a backend can rasterise.
-///
 /// Backends only ever call these methods, so a new kind of shape needs no
-/// backend changes. `distance` runs once for every pixel a shape may cover,
-/// so implementations should keep it cheap.
+/// backend changes.
 pub trait Shape {
-    /// The top-left and bottom-right corners of a box enclosing the shape,
-    /// used to skip pixels it cannot touch. It may be larger than the shape,
-    /// which only costs time, but never smaller, which would clip it.
+    /// Backends skip every pixel outside these corners, so the box may be
+    /// larger than the shape, which only costs time, but never smaller,
+    /// which clips it.
     fn bounds(&self) -> [Point; 2];
 
     /// Kept apart from the geometry so that wrappers such as [`Outline`] can
     /// draw a shape's geometry in a colour of their own.
     fn color(&self) -> Rgba;
 
-    /// The signed distance from `p` to the edge, in logical pixels: negative
-    /// inside, zero on the edge, positive outside. Antialiasing and
-    /// [`Outline`] rely on it being the true Euclidean distance near the
-    /// edge; an approximation makes edges and outlines uneven in width.
+    /// Negative inside, positive outside. It has to be the true Euclidean
+    /// distance near the edge: antialiasing and [`Outline`] rely on it, and
+    /// an approximation makes edges and outlines uneven in width. It runs
+    /// once for every pixel a shape may cover, so keep it cheap.
     fn distance(&self, p: Point) -> f32;
 
     /// Wrapping a shape, rather than giving every shape a stroke of its own,
@@ -127,11 +113,9 @@ pub trait Shape {
     }
 }
 
-/// An axis-aligned rectangle from its top-left corner `p0` to its
-/// bottom-right corner `p1`.
-///
-/// The corners are not normalised: every caller already knows their order,
-/// and `distance` runs once per pixel. Swapped corners give wrong bounds and
+/// `p0` has to be the top-left corner and `p1` the bottom-right one. They are
+/// not normalised, because every caller already knows their order and
+/// `distance` runs once per pixel; swapped corners give wrong bounds and
 /// distances.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -150,8 +134,8 @@ impl Shape for Rect {
     }
 
     fn distance(&self, p: Point) -> f32 {
-        // The exact box distance: Euclidean beyond the corners, so that
-        // antialiasing and outlines stay round there.
+        // Euclidean beyond the corners rather than the cheaper max-norm, so
+        // that antialiased and outlined corners stay round.
         let (cx, cy) = ((self.p0.x + self.p1.x) / 2.0, (self.p0.y + self.p1.y) / 2.0);
         let (hx, hy) = ((self.p1.x - self.p0.x) / 2.0, (self.p1.y - self.p0.y) / 2.0);
         let (qx, qy) = ((p.x - cx).abs() - hx, (p.y - cy).abs() - hy);
@@ -159,7 +143,6 @@ impl Shape for Rect {
     }
 }
 
-/// A filled circle; `r` is its radius in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Circle {
     pub center: Point,
@@ -185,10 +168,8 @@ impl Shape for Circle {
     }
 }
 
-/// The shapes to draw, back to front.
-///
-/// A surface's scene is meant to be cleared and refilled for every frame
-/// rather than replaced, so that its allocation is reused.
+/// Back to front. Clear and refill a surface's scene every frame instead of
+/// replacing it, so that its allocation is reused.
 #[derive(Default)]
 pub struct Scene {
     pub shapes: Vec<Box<dyn Shape>>,
@@ -214,13 +195,10 @@ impl Scene {
     }
 }
 
-/// The outline of any shape, centred on its edge. Built with
-/// [`Shape::outline`].
-///
-/// Centring the line on the edge means an outline drawn over its own fill
-/// hides the fill's antialiased fringe instead of leaving a seam. The line
-/// has a colour of its own and ignores the wrapped shape's, which is how a
-/// border without a fill is drawn: outline a transparent shape.
+/// Centred on the edge, so that an outline drawn over its own fill hides the
+/// fill's antialiased fringe instead of leaving a seam. It ignores the
+/// wrapped shape's colour, which is how a border without a fill is drawn:
+/// outline a transparent shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Outline<S> {
     shape: S,
@@ -230,7 +208,6 @@ pub struct Outline<S> {
 
 impl<S: Shape> Shape for Outline<S> {
     fn bounds(&self) -> [Point; 2] {
-        // The line reaches half its width past the shape's edge.
         let [p0, p1] = self.shape.bounds();
         let w = self.width / 2.0;
         [
@@ -287,8 +264,7 @@ mod tests {
     }
 
     /// Backends skip every pixel outside `bounds`, so a covered point
-    /// outside them would silently be clipped. Sampled on a quarter-pixel
-    /// grid reaching well past the bounds.
+    /// outside them would be clipped without any other test noticing.
     fn assert_bounds_enclose(shape: &dyn Shape) {
         fn around(lo: f32, hi: f32) -> impl Iterator<Item = f32> {
             let n = ((hi - lo + 10.0) * 4.0) as usize;

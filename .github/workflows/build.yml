@@ -1,7 +1,5 @@
-# Tests the workspace and packs tonish exactly as a release ships it. Pull
-# requests and releases both call this, so a pull request that passes builds
-# the very package its merge would release. The package is kept as the
-# workflow artifact "package" for the jobs after it.
+# Pull requests and releases both call this, so that a pull request that
+# passes has built the very package its merge would release.
 name: Build
 
 on:
@@ -33,9 +31,9 @@ jobs:
         with:
           tool: just,cargo-nextest
 
-      # Keyed on Cargo.lock, the toolchain and RUSTFLAGS. Runs on main save
-      # it for every pull request; a pull request saves its own for its next
-      # push.
+      # A pull request can read the cache saved on main but not those of
+      # other pull requests, so each release warms the cache for every pull
+      # request opened after it.
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
 

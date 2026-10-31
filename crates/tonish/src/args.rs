@@ -1,12 +1,24 @@
+//! clap prints help, version and errors itself and exits (0 for help and
+//! version, 2 for a wrong command line), so whoever gets an [`Args`] can rely
+//! on a valid command line and never handles those cases.
+
 use clap::Parser;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::shell::Shell;
 
+// clap turns the doc comments below into `--help`, so they are written for
+// the people running tonish, not for its developers.
+
+/// A desktop shell for Wayland: panels on every monitor.
 #[derive(Debug, Parser)]
 #[command(name = "tonish", version)]
 pub struct Args {
+    // The default is only named in the help, not set with `default_value`:
+    // it depends on the environment, and `None` lets `load` tell a file asked
+    // for from the default one.
+    /// Read the settings from FILE [default: $XDG_CONFIG_HOME/tonish/config.toml]
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 }
@@ -22,22 +34,34 @@ impl Args {
     }
 }
 
+/// Follows the XDG base directory spec, as sway and waybar do, including its
+/// rule to ignore a relative `$XDG_CONFIG_HOME`.
+///
+/// The variables are passed in instead of read here, so that tests can try
+/// any values: changing the real environment is `unsafe` since Rust 2024 and
+/// races with tests running in parallel.
 fn default_config(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     let folder = xdg_config_home
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| home.map(PathBuf::from))?;
+        .or_else(|| home.map(|h| PathBuf::from(h).join(".config")))?;
 
-    Some(folder.join("config").join("tonish").join("config.toml"))
+    Some(folder.join("tonish").join("config.toml"))
 }
 
+/// A file named with `--config` has to exist, because running with the
+/// built-in settings instead would hide a typo in its path. The default file
+/// may be missing, as it is on a first start, and then the built-in settings
+/// apply.
+///
+/// Reading the file comes next: until then, a file that exists still gives
+/// [`Shell::default`].
 pub fn load(args: Args) -> Result<Shell, String> {
     match args.config_path() {
         Some(path) if path.exists() => Ok(Shell::default()),
-        Some(path) if args.config.is_some() => Err(format!(
-            "tonish - config file does not exist: {}",
-            path.display()
-        )),
+        Some(path) if args.config.is_some() => {
+            Err(format!("config file does not exist: {}", path.display()))
+        }
         _ => Ok(Shell::default()),
     }
 }
@@ -48,6 +72,9 @@ mod tests {
     use clap::CommandFactory;
     use clap::error::ErrorKind;
 
+    /// `try_parse_from` returns what `parse` would print and exit with, so
+    /// help, version and mistakes are checked by their [`ErrorKind`] without
+    /// ending the test.
     fn parse(args: &[&str]) -> Result<Args, clap::Error> {
         Args::try_parse_from(std::iter::once("tonish").chain(args.iter().copied()))
     }

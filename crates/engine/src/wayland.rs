@@ -1,6 +1,3 @@
-//! The engine on Wayland: layer surfaces on every monitor (wlr-layer-shell),
-//! drawn on the CPU into wl_shm, all on one calloop loop.
-
 use renderer::Scene;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -27,7 +24,6 @@ use wayland_client::{
 
 use crate::app::{App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
 
-/// Run `app` until the compositor goes.
 pub fn run(app: Box<dyn App>) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("no Wayland display: {e}"))?;
     let (globals, queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
@@ -61,7 +57,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
 struct Surface {
     layer: LayerSurface,
     spec: SurfaceSpec,
-    /// Its size as the compositor gave it (logical px), once it has.
+    /// Logical pixels: the buffer is this times the output's scale.
     size: (u32, u32),
     configured: bool,
 }
@@ -86,7 +82,6 @@ struct Engine {
 }
 
 impl Engine {
-    /// A monitor came: the shell's surfaces on it.
     fn add_output(&mut self, wl: wl_output::WlOutput) {
         let Some(info) = self.output_state.info(&wl) else {
             return;
@@ -111,8 +106,9 @@ impl Engine {
         });
     }
 
-    /// A layer surface on monitor `wl` as `spec` says, committed empty: the
-    /// compositor answers with its size (`configure`).
+    /// Committed without a buffer, because wlr-layer-shell sends the first
+    /// `configure`, which carries the size to draw at, only after such a
+    /// commit.
     fn layer(&self, wl: &wl_output::WlOutput, spec: SurfaceSpec) -> Surface {
         use smithay_client_toolkit::shell::wlr_layer::Layer as L;
         let level = match spec.layer {
@@ -151,8 +147,6 @@ impl Engine {
         })
     }
 
-    /// Draw surface `si` of monitor `oi`: the shell's scene, on the CPU,
-    /// into a buffer of shared memory, attached and committed.
     fn draw(&mut self, oi: usize, si: usize) {
         let out = &self.outs[oi];
         let scale = out.info.scale;
@@ -251,8 +245,8 @@ impl LayerShellHandler for Engine {
         }
     }
 
-    /// The compositor's size for a surface: 0 along an axis is the spec's
-    /// own. Drawn then.
+    /// The compositor sends 0 along an axis it leaves to the client, so the
+    /// spec's own size stands there.
     fn configure(
         &mut self,
         _: &Connection,

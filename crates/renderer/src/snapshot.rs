@@ -1,24 +1,16 @@
-//! Pictures of scenes, for checking what the renderer draws by eye and
-//! against reference images.
-//!
-//! A [`Picture`] is drawn by the CPU rasteriser, so it needs no display and
-//! no GPU, and it reads and writes PNG, so a reference can be committed and
-//! opened in any image viewer. [`Picture::diff`] compares two pictures with
-//! a tolerance, because a later backend, or a change of rounding, may move
-//! a channel by a step without anything looking different.
+//! A [`Picture`] is drawn by the CPU rasteriser, so that what the renderer
+//! draws can be checked without a display or a GPU. It is stored as PNG, so
+//! that a reference image can be committed and opened in any viewer.
 
 use png;
 use std::path::Path;
 
 use crate::scene::{Rgba, Shape};
 
-/// `w`×`h` physical pixels of premultiplied RGBA, row by row.
-///
 /// RGBA rather than the rasteriser's BGRA, because that is what PNG stores.
-/// Premultiplied, because that is what the rasteriser produces and what the
-/// compositor shows. PNG itself means straight alpha, so a viewer shows
-/// translucent pixels too dark; [`Picture::over`] an opaque ground first
-/// gives a picture that looks in a viewer as it does on screen.
+/// Premultiplied, because that is what the compositor shows. PNG means
+/// straight alpha, so a viewer shows translucent pixels too dark unless the
+/// picture is put [`over`](Picture::over) an opaque ground first.
 pub struct Picture {
     pub w: u32,
     pub h: u32,
@@ -26,35 +18,27 @@ pub struct Picture {
 }
 
 impl Picture {
-    /// Draws `shapes` on a transparent picture of `size` logical pixels at
-    /// `scale`, as a surface of that size on such an output would show them.
-    /// The physical size is rounded down, as the compositor does.
+    /// The physical size is rounded down, as the compositor does, so that a
+    /// picture has the size of the buffer a surface would get.
     pub fn paint(size: (f32, f32), scale: f32, shapes: &[Box<dyn Shape>]) -> Self {
         let (w, h) = ((size.0 * scale) as u32, (size.1 * scale) as u32);
         let mut px = vec![0u8; w as usize * h as usize * 4];
         crate::cpu::draw(&mut px, w as usize, h as usize, scale, shapes);
-        // BGRA to RGBA: only blue and red trade places.
         for p in px.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
         }
         Self { w, h, px }
     }
 
-    /// Puts the picture in front of a solid `ground`, the way a surface
-    /// shows over whatever lies behind it.
-    ///
     /// Over an opaque ground every pixel comes out opaque, where
-    /// premultiplied and straight alpha agree, so the saved PNG looks right
-    /// in any viewer. A translucent ground keeps the result translucent.
+    /// premultiplied and straight alpha agree, so that the saved PNG looks
+    /// right in any viewer.
     pub fn over(mut self, ground: Rgba) -> Self {
-        // Premultiplied once, not once per pixel. Products of two bytes
-        // reach 255 * 255, so the arithmetic is widened to `u16`; storage
-        // stays `u8`.
+        // Products of two bytes reach 255 * 255, hence `u16`.
         let a = ground.a as u16;
         let g = [ground.r, ground.g, ground.b, 255].map(|c| ((c as u16 * a + 127) / 255) as u8);
 
         for b in self.px.as_chunks_mut::<4>().0 {
-            // How much of the ground the pixel leaves uncovered.
             let inv = 255 - b[3] as u16;
             for i in 0..4 {
                 b[i] = (b[i] as u16 + (g[i] as u16 * inv + 127) / 255) as u8;
@@ -63,8 +47,8 @@ impl Picture {
         self
     }
 
-    /// Writes the picture as an 8-bit RGBA PNG, creating missing directories
-    /// so that a new reference image can be saved where it belongs.
+    /// Creates missing directories, so that a new reference image can be
+    /// saved where it belongs.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -79,8 +63,6 @@ impl Picture {
         w.write_image_data(&self.px).map_err(std::io::Error::other)
     }
 
-    /// Reads a PNG written by [`Picture::save`].
-    ///
     /// Anything other than 8-bit RGBA is refused rather than converted: a
     /// reference image in another format has been re-saved by some other
     /// tool, and comparing against a conversion of it would hide that.
@@ -103,13 +85,13 @@ impl Picture {
         })
     }
 
-    /// How far two pictures are apart: the largest difference of any
-    /// channel, and how many pixels differ by more than `tolerance` in some
-    /// channel. `None` if their sizes differ, since then no pixel has a
-    /// counterpart.
+    /// Returns the largest channel difference and the number of pixels off
+    /// by more than `tolerance`, rather than a verdict, so that a failing
+    /// check can say whether a few pixels are badly off or many slightly. The
+    /// tolerance exists because a later backend, or a change of rounding, may
+    /// move a channel by a step without anything looking different.
     ///
-    /// Both numbers are returned, rather than a verdict, so that a failing
-    /// check can say whether a few pixels are badly off or many slightly.
+    /// `None` if the sizes differ, since then no pixel has a counterpart.
     pub fn diff(&self, other: &Picture, tolerance: u8) -> Option<(u8, usize)> {
         if self.w != other.w || self.h != other.h {
             return None;
@@ -184,7 +166,6 @@ mod tests {
 
     #[test]
     fn pictures_apart_say_how_far() {
-        // A white rect over a single pixel against an empty picture.
         let mut s = Scene::new();
         let a = Picture::paint((4.0, 4.0), 1.0, &s.shapes);
         s.push(rect(0.0, 0.0, 1.0, 1.0, Rgba::from_hex(0xffffff, 1.0)));
@@ -229,7 +210,6 @@ mod tests {
 
     #[test]
     fn over_shows_the_ground_through_translucent_pixels() {
-        // Half-opaque red, premultiplied, over opaque blue.
         let p = pixel([128, 0, 0, 128]).over(Rgba::from_hex(0x0000ff, 1.0));
         assert_eq!(p.px, [128, 0, 127, 255]);
     }

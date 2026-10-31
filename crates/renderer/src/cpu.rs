@@ -1,30 +1,22 @@
-//! The CPU rasteriser.
-//!
-//! It evaluates every shape's signed distance at every pixel the shape may
-//! cover, exactly as a GPU fragment shader would. That keeps its output a
-//! faithful reference for a future GPU backend and a fallback where no GPU is
-//! available. It is written to be obviously correct rather than fast; the
-//! tests below pin its behaviour so that optimisations, such as filling the
-//! solid interior of opaque shapes directly, can be checked against them.
+//! Evaluates every shape's signed distance at every pixel it may cover,
+//! exactly as a GPU fragment shader would, so that its output stays a
+//! faithful reference for a future GPU backend and a fallback where there is
+//! no GPU. It is written to be obviously correct rather than fast; the tests
+//! pin its behaviour so that optimisations, such as filling the solid
+//! interior of opaque shapes directly, can be checked against them.
 
 use crate::scene::{Point, Shape};
 
-/// Rasterises `shapes` into `px`, back to front.
-///
-/// `px` holds `w`×`h` physical pixels of premultiplied BGRA. That is the byte
-/// layout of `wl_shm`'s ARGB8888 on little-endian machines, so the engine can
-/// draw straight into a shared-memory buffer without converting it. Shapes
-/// stay in logical pixels and `scale` maps them to physical ones, so layout
-/// never has to know the output's scale.
-///
-/// The buffer is cleared first because shared-memory pools hand back buffers
-/// that still hold an earlier frame.
+/// `px` is premultiplied BGRA, because that is the byte layout of `wl_shm`'s
+/// ARGB8888 on little-endian machines: the engine draws straight into a
+/// shared-memory buffer without converting it.
 ///
 /// # Panics
 ///
 /// If `px` is shorter than `w * h * 4` bytes and a shape reaches the missing
 /// part.
 pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Shape>]) {
+    // Shared-memory pools hand back buffers that still hold an earlier frame.
     px.fill(0);
     // Whole pixels keep byte offsets out of the loop below.
     let (px, _) = px.as_chunks_mut::<4>();
@@ -46,7 +38,6 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
         let (x0, x1) = span(p0.x, p1.x, w);
         let (y0, y1) = span(p0.y, p1.y, h);
 
-        // Once per shape rather than once per pixel.
         let c = s.color();
         // Channels stay in 0..=255 so blending needs no rescaling per pixel.
         let [red, green, blue] = [c.r, c.g, c.b].map(f32::from);
@@ -65,9 +56,8 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
                     continue;
                 }
 
-                // Premultiplied source-over: a plain weighted sum with no
-                // division per pixel. What lies underneath shows through as
-                // far as this shape leaves the pixel uncovered.
+                // Premultiplied source-over, because it needs no division
+                // per pixel.
                 let keep = 1.0 - alpha;
                 let blend = |new: f32, curr: u8| (new * alpha + curr as f32 * keep + 0.5) as u8;
                 bytes[0] = blend(blue, bytes[0]);
@@ -84,8 +74,8 @@ mod tests {
     use super::*;
     use crate::scene::{Circle, Rect, Rgba, Scene};
 
-    /// Draws into a fresh buffer for every query, so that no test can depend
-    /// on what another left behind.
+    /// A fresh buffer for every query, so that no test can depend on what
+    /// another left behind.
     fn at(scene: &Scene, (w, h): (usize, usize), scale: f32, (x, y): (usize, usize)) -> [u8; 4] {
         let mut px = vec![0u8; w * h * 4];
         draw(&mut px, w, h, scale, &scene.shapes);

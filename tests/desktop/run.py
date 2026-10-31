@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""tonish on a desktop: each scenario starts it in a headless sway of its
-own (two 3840×2160 monitors at scale 2) and checks what it does there.
-
-    tests/desktop/run.py [FILTER]     scenarios whose name holds FILTER
-
-With CI set in the environment, as on GitHub, only the general scenarios
-run; the ones about how panels look are left to local runs.
-
-Nothing of the real desktop is used: a fresh HOME, XDG folders and runtime
-folder, sway drawing into memory. Screenshots of failures go to
-tests/desktop/out/.
+"""Each scenario gets a headless sway of its own, with a fresh HOME, XDG
+folders and runtime folder, so that scenarios cannot affect each other or the
+real desktop. It has two 3840×2160 monitors at scale 2, so that bugs with
+several monitors or with scaling show up.
 """
 import json
 import os
@@ -43,12 +36,11 @@ def check(ok, what):
 
 
 def near(a, b, by=6):
-    """Whether two colours are the same but for scaling's blur."""
+    """Scaling blurs edges by a few steps, hence the tolerance."""
     return len(a) == len(b) and all(abs(x - y) <= by for x, y in zip(a, b))
 
 
 def wait_for(cond, seconds, step=0.02):
-    """When cond() first held, in s from now; None if it did not."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < seconds:
         if cond():
@@ -58,8 +50,6 @@ def wait_for(cond, seconds, step=0.02):
 
 
 class Desktop:
-    """A headless sway with tonish on it."""
-
     def __init__(self):
         self.dir = Path(tempfile.mkdtemp(prefix="tonish-test-"))
         home, run = self.dir / "home", self.dir / "run"
@@ -82,7 +72,7 @@ class Desktop:
         self.tonish = subprocess.Popen([str(TONISH)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
 
     def workspaces(self):
-        """The room each monitor leaves windows: x, y, width, height on that monitor."""
+        """Relative to each monitor, because sway reports positions in the layout of all of them."""
         run = lambda what: json.loads(subprocess.run(["swaymsg", "-t", what, "-r"], env=self.env,
                                                      capture_output=True, text=True, check=False).stdout or "[]")
         at = {o["name"]: o["rect"] for o in run("get_outputs")}
@@ -93,18 +83,17 @@ class Desktop:
         return out
 
     def pixels(self):
-        """The first monitor as it looks: its width, and its pixels' (r, g, b) by row (one per logical px)."""
+        """Captured at scale 1, so that scenarios address pixels in logical coordinates."""
         ppm = subprocess.run(["grim", "-o", "HEADLESS-2", "-s", "1", "-t", "ppm", "-"], env=self.env,
                              capture_output=True, check=False).stdout
         if not ppm.startswith(b"P6"):
             return 0, b""
         _, rest = ppm.split(b"\n", 1)
         size, rest = rest.split(b"\n", 1)
-        _, rest = rest.split(b"\n", 1)  # the most a channel is: 255
+        _, rest = rest.split(b"\n", 1)  # grim always writes 255 as the maximum value
         return int(size.split()[0]), rest
 
     def at(self, x, y):
-        """The colour at (x, y) on the first monitor (logical px)."""
         w, px = self.pixels()
         i = (y * w + x) * 3
         return tuple(px[i:i + 3])
@@ -132,20 +121,17 @@ class Desktop:
 
 SCENARIOS = []
 
-# On CI (GitHub sets CI), only the general scenarios run: tonish starts and
-# behaves like a shell. How exactly its panels look is checked locally only,
-# so that changing a panel does not need a round trip through CI.
+# CI runs only the general scenarios. How exactly panels look is checked
+# locally, so that changing a panel does not need a round trip through CI.
 ON_CI = bool(os.environ.get("CI"))
 
 
 def scenario(f):
-    """A general scenario, run everywhere."""
     SCENARIOS.append((f, False))
     return f
 
 
 def local(f):
-    """A scenario about the details of a panel, run locally only."""
     SCENARIOS.append((f, True))
     return f
 
@@ -154,7 +140,6 @@ def local(f):
 
 @scenario
 def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
-    """Windows start some way down on both monitors, and tonish keeps running."""
     def kept(rooms):
         return len(rooms) == 2 and all(x == 0 and y > 0 and w == 1920 and y + h == 1080 for x, y, w, h in rooms)
     check(wait_for(lambda: kept(d.workspaces()), 3.0) is not None, f"room for windows: {d.workspaces()}")
@@ -163,14 +148,12 @@ def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
 
 @local
 def the_bar_is_44_px_high(d):
-    """Windows start under the bar, exactly 44 px down, on both monitors."""
     want = [(0, 44, 1920, 1080 - 44)] * 2
     check(wait_for(lambda: d.workspaces() == want, 3.0) is not None, f"room for windows: {d.workspaces()}")
 
 
 @local
 def the_bar_is_drawn_with_its_logo(d):
-    """The bar's ground along the top, the logo's dot at its start, the desktop under it."""
     surface, primary = (0x11, 0x13, 0x18), (0xc9, 0xa9, 0x6e)
     check(wait_for(lambda: near(d.at(200, 22), surface), 3.0) is not None, f"the bar at (200, 22): {d.at(200, 22)}")
     check(near(d.at(24, 22), primary), f"the logo's dot at (24, 22): {d.at(24, 22)}")

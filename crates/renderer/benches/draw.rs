@@ -1,5 +1,3 @@
-//! Benchmarks for the CPU rasteriser.
-//!
 //! The cases bracket what the shell actually draws. A bar is redrawn only
 //! when something on it changes, so its cost is paid rarely; a full-screen
 //! surface is what an animation would redraw every frame, and it is where
@@ -14,8 +12,8 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use renderer::cpu;
 use renderer::{Circle, Point, Rect, Rgba, Scene, Shape};
 
-/// A surface sized in logical pixels, as the shell lays it out, so that the
-/// same scene can be measured at different output scales.
+/// Sized in logical pixels, as the shell lays it out, so that the same scene
+/// can be measured at different output scales.
 struct Case {
     name: &'static str,
     size: (f32, f32),
@@ -31,7 +29,7 @@ fn background(width: f32, height: f32) -> Rect {
     }
 }
 
-/// A bar with a ring-and-dot logo, the shapes the first version draws.
+/// The shapes the shell draws today, so that this case tracks its real cost.
 fn bar(width: f32) -> Scene {
     let gold = Rgba::from_hex(0xc9a96e, 1.0);
     let logo = Circle {
@@ -50,7 +48,6 @@ fn bar(width: f32) -> Scene {
     scene
 }
 
-/// A bar full of small translucent outlined icons.
 fn icons(width: f32) -> Scene {
     let mut scene = Scene::new();
     scene.push(background(width, 44.0));

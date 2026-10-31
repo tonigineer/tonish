@@ -1,8 +1,3 @@
-//! toniSH : A wayland desktop shell
-//!
-//!     tonish
-//!     tonish --version
-
 use clap::Parser;
 use std::process::ExitCode;
 use tonish::args::{Args, load};

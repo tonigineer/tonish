@@ -1,6 +1,6 @@
-//! gineer-engine: the desktop side. A shell describes its surfaces and draws
-//! scenes ([`App`]); the engine puts them on every monitor as layer
-//! surfaces and draws them.
+//! Everything Wayland lives here, so that a shell only describes its
+//! surfaces and draws scenes through [`App`], and can be tested without a
+//! compositor.
 
 mod app;
 mod wayland;

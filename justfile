@@ -2,7 +2,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 just := just_executable()
 
-# The workspace version, from Cargo.toml on stdin; fails if there is none.
+# `grep .` fails on empty input, so that a missing version stops a recipe
+# instead of comparing as an empty string.
 read_version := "sed -n 's/^version *= *\"\\(.*\\)\"/\\1/p' | grep ."
 
 [doc("List the commands, by group.")]
@@ -107,8 +108,8 @@ bump level:
 version-check ref="origin/main":
     @old=$({{ just }} version {{ ref }}) && new=$({{ just }} version) && {{ just }} _newer "$old" "$new"
 
-# Fails unless NEW is a later version than OLD. sort -V orders plain X.Y.Z
-# correctly, but would put a pre-release such as 1.0.0-rc.1 after 1.0.0.
+# sort -V orders plain X.Y.Z correctly, but would put a pre-release such as
+# 1.0.0-rc.1 after 1.0.0.
 [private]
 [no-exit-message]
 _newer old new:

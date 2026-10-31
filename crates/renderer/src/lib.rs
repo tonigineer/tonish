@@ -1,10 +1,5 @@
-//! The description of what to draw, kept free of Wayland.
-//!
-//! Nothing here needs a display, so everything that decides what a frame
-//! looks like can be built and tested headless, and a GPU backend can later
-//! gineer-render: drawing, and nothing of Wayland. A [`Scene`] of shapes in
-//! logical pixels, drawn by the CPU ([`cpu`]) into pixels, or into a
-//! [`snapshot::Picture`].
+//! Kept free of Wayland, so that everything deciding what a frame looks like
+//! can be built and tested without a display.
 
 pub mod cpu;
 pub mod scene;
