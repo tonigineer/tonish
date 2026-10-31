@@ -20,6 +20,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Not the native CPU that .cargo/config.toml asks for: the cache comes back
+  # on other runners, whose CPUs may lack its instructions, and rustdoc dies
+  # with SIGILL when it loads a proc macro built for one of them.
+  RUSTFLAGS: -C target-cpu=x86-64-v2
 
 jobs:
   book:
