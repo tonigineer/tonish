@@ -10,7 +10,7 @@ engine     Wayland, the event loop, the socket, files    no idea what a panel is
 tonish     the shell: panels, settings, messages, CLI    no Wayland
 ```
 
-Only the engine speaks Wayland. That keeps the renderer and the shell testable without a compositor: almost all the tests run in plain processes, and only the [desktop scenarios](testing.md#desktop-scenarios) need sway.
+Only the engine speaks Wayland. That keeps the renderer and the shell testable without a compositor: almost all the tests run in plain processes, and only the [desktop tests](testing.md#desktop-tests) need sway.
 
 ## The `App` trait
 

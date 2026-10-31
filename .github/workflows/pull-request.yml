@@ -17,6 +17,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # As --locked does for cargo: an outdated uv.lock is an error, instead of
+  # being rewritten on the runner.
+  UV_LOCKED: 1
 
 jobs:
   # Each merge into main is a release, so its version has to be new. Branches
@@ -59,18 +62,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install just and mdBook
+      - name: Install just, mdBook and uv
         uses: taiki-e/install-action@v2
         with:
-          tool: just,mdbook@0.5
-
-      # taiki-e/install-action has no ruff; Astral's own action installs it
-      # without running it.
-      - name: Install ruff
-        uses: astral-sh/ruff-action@v4
-        with:
-          version: "0.17"
-          args: --version
+          tool: just,mdbook@0.5,uv
 
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
@@ -87,7 +82,7 @@ jobs:
     name: Build
     uses: ./.github/workflows/build.yml
 
-  # Runs the packaged binary, so that the scenarios test what a merge would
+  # Runs the packaged binary, so that the desktop tests check what a merge would
   # release and nothing is compiled twice.
   desktop:
     name: Desktop
@@ -99,8 +94,8 @@ jobs:
       # a container gets by default is too little for two 4K monitors.
       options: --shm-size=1g
     steps:
-      - name: Install sway, grim and Python
-        run: pacman -Syu --noconfirm --needed sway grim python > /dev/null
+      - name: Install sway, grim, Python and uv
+        run: pacman -Syu --noconfirm --needed sway grim python uv > /dev/null
 
       # sway carries cap_sys_nice; a container may not run a binary with a
       # capability.
@@ -122,8 +117,8 @@ jobs:
           mkdir -p target/release
           tar xzf dist/tonish-*.tar.gz --strip-components=1 -C target/release
 
-      - name: Run the desktop scenarios
-        run: python3 tests/desktop/run.py
+      - name: Run the desktop tests
+        run: uv run pytest -m "not local"
 
       - name: Keep the screenshots of failures
         if: failure()
