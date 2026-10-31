@@ -33,8 +33,8 @@ impl Default for Config {
 
 /// Sizes are cut to whole pixels, so a thickness under 1 would ask for size 0
 /// along an axis the panel is not anchored on both sides of. That is a
-/// layer-shell protocol error that gets tonish disconnected. Checked while parsing, so that the error names
-/// the line.
+/// layer-shell protocol error that gets tonish disconnected. Checked while
+/// parsing, so that the error names the line.
 fn thickness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
     let t = f32::deserialize(d)?;
     if t >= 1.0 {

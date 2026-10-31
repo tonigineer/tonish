@@ -1,6 +1,7 @@
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use calloop::signals::{Signal, Signals};
 use inotify::{Inotify, WatchDescriptor, WatchMask};
@@ -24,6 +25,7 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
+use tracing::{debug, error, info, warn};
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
@@ -54,7 +56,10 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
     let signals = Signals::new(&[Signal::SIGINT, Signal::SIGTERM]).map_err(|e| e.to_string())?;
     event_loop
         .handle()
-        .insert_source(signals, |_, _, engine| engine.quit = true)
+        .insert_source(signals, |event, _, engine| {
+            info!(signal = ?event.signal(), "shutting down");
+            engine.quit = true;
+        })
         .map_err(|e| e.error.to_string())?;
 
     // Declared after the event loop, so that it is dropped first: the file is
@@ -91,7 +96,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
     let watch = match Watch::new(app.watched()) {
         Ok(watch) => watch,
         Err(e) => {
-            eprintln!("cannot watch for changes, so edits apply after a restart: {e}");
+            warn!("cannot watch for changes, so edits apply after a restart: {e}");
             None
         }
     };
@@ -211,8 +216,10 @@ impl Engine {
             return PostAction::Continue;
         };
         let reply = self.app.message(&text);
+        debug!(message = %text, reply = %reply.text, "message");
         socket::reply(stream, &reply.text);
         if reply.quit {
+            info!(message = %text, "shutting down");
             self.quit = true;
             PostAction::Disable
         } else {
@@ -235,6 +242,13 @@ impl Engine {
             scale: info.scale_factor.max(1),
         };
         let specs = self.app.surfaces(&out);
+        info!(
+            monitor = %name(&out),
+            size = ?out.size,
+            scale = out.scale,
+            surfaces = specs.len(),
+            "monitor added"
+        );
         let surfaces = specs
             .into_iter()
             .map(|spec| self.layer(&wl, spec))
@@ -262,7 +276,7 @@ impl Engine {
             &self.qh,
             surface,
             level,
-            Some(format!("gineer-{}", spec.name)),
+            Some(format!("tonish-{}", spec.name)),
             Some(wl),
         );
         layer.set_anchor(spec.anchor);
@@ -300,6 +314,7 @@ impl Engine {
                 if let Some((_, path)) = hit
                     && !changed.contains(path)
                 {
+                    debug!(file = %path.display(), "changed");
                     changed.push(path.clone());
                 }
             }
@@ -319,6 +334,7 @@ impl Engine {
     /// The old surfaces are destroyed as they are dropped; the new ones are
     /// drawn once the compositor configures them, as on a first start.
     fn rebuild(&mut self) {
+        debug!("rebuilding every surface");
         for oi in 0..self.outs.len() {
             let wl = self.outs[oi].wl.clone();
             let specs = self.app.surfaces(&self.outs[oi].info);
@@ -345,6 +361,7 @@ impl Engine {
             return;
         }
         let size = (surf.size.0 as f32, surf.size.1 as f32);
+        let started = Instant::now();
         self.scene.clear();
         let mut paint = Paint {
             scene: &mut self.scene,
@@ -353,11 +370,15 @@ impl Engine {
         };
         self.app.draw(out.info.id, SurfaceId(si), &mut paint);
         let (w, h) = (surf.size.0 as i32 * scale, surf.size.1 as i32 * scale);
-        let Ok((buffer, px)) = self
+        let (buffer, px) = match self
             .pool
             .create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
-        else {
-            return;
+        {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                error!(monitor = %name(&out.info), "no buffer to draw into: {e}");
+                return;
+            }
         };
         renderer::cpu::draw(px, w as usize, h as usize, scale as f32, &self.scene.shapes);
         let ws = surf.layer.wl_surface();
@@ -366,7 +387,18 @@ impl Engine {
             ws.damage_buffer(0, 0, w, h);
         }
         surf.layer.commit();
+        debug!(
+            monitor = %name(&out.info),
+            surface = si,
+            size = ?(w, h),
+            took = ?started.elapsed(),
+            "drew"
+        );
     }
+}
+
+fn name(out: &Output) -> &str {
+    out.name.as_deref().unwrap_or("unnamed")
 }
 
 // ── Wayland handlers ─────────────────────────────────────────────────────────
@@ -424,6 +456,9 @@ impl OutputHandler for Engine {
         _: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
+        if let Some(out) = self.outs.iter().find(|o| o.wl == output) {
+            info!(monitor = %name(&out.info), "monitor removed");
+        }
         self.outs.retain(|o| o.wl != output);
     }
 }
@@ -433,7 +468,8 @@ impl LayerShellHandler for Engine {
     /// away, so the whole output is dropped instead of a single surface.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if let Some((oi, _)) = self.find_layer(layer) {
-            self.outs.remove(oi);
+            let out = self.outs.remove(oi);
+            info!(monitor = %name(&out.info), "surface closed, monitor dropped");
         }
     }
 
@@ -511,7 +547,7 @@ mod tests {
         // SAFETY: nextest runs each test in a process of its own.
         unsafe {
             std::env::remove_var("WAYLAND_SOCKET");
-            std::env::set_var("WAYLAND_DISPLAY", "gineer-no-such-display");
+            std::env::set_var("WAYLAND_DISPLAY", "tonish-no-such-display");
         }
         let err = run(Box::new(Nothing)).unwrap_err();
         assert!(err.starts_with("no Wayland display"), "{err}");

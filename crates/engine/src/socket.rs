@@ -3,6 +3,8 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
+use tracing::info;
+
 /// Removes the socket file when dropped, so that it goes on every way out of
 /// `run`, errors and panics included. Only SIGKILL leaves it behind, and
 /// [`listen`] replaces it on the next start.
@@ -29,6 +31,7 @@ pub fn listen(path: &Path) -> Result<(UnixListener, Socket), String> {
                     path.display()
                 ));
             }
+            info!(socket = %path.display(), "replacing a socket file nobody answers on");
             fs::remove_file(path).and_then(|()| UnixListener::bind(path))
         }
         bound => bound,
@@ -37,6 +40,7 @@ pub fn listen(path: &Path) -> Result<(UnixListener, Socket), String> {
     // Nonblocking, because accepting runs on the event loop, which must not
     // wait for anyone.
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    info!(socket = %path.display(), "listening");
     Ok((
         listener,
         Socket {

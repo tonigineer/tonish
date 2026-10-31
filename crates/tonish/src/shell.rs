@@ -7,6 +7,7 @@ use crate::theme::Theme;
 use engine::{self, App, Layer, Output, OutputId, Paint, Reply, SurfaceId, SurfaceSpec};
 use renderer::{Circle, Point, Rect, Scene, Shape};
 use serde::Deserialize;
+use tracing::{debug, info, warn};
 
 pub const EVERY: &str = "*";
 pub const END: f32 = 8.0;
@@ -76,6 +77,7 @@ impl Shell {
     /// unwatched.
     pub fn read(path: PathBuf) -> Result<Self, String> {
         let config = config::read(&path)?;
+        info!(file = %path.display(), "settings read");
         Ok(Self {
             file: Some(path),
             ..Self::new(config)
@@ -236,14 +238,18 @@ impl App for Shell {
     /// disappearing mid-edit would be worse than an edit not applying yet.
     fn changed(&mut self, path: &Path) -> bool {
         match config::read(path) {
-            Ok(config) if config == self.config => false,
+            Ok(config) if config == self.config => {
+                debug!(file = %path.display(), "saved without a change");
+                false
+            }
             Ok(config) => {
+                info!(file = %path.display(), "settings changed");
                 self.config = config;
                 self.screens = layout(config);
                 true
             }
             Err(e) => {
-                eprintln!("tonish: {e}\ntonish: keeping the settings from before");
+                warn!("keeping the settings from before: {e}");
                 false
             }
         }

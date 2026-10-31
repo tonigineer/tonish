@@ -195,6 +195,14 @@ def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
 
 
 @scenario
+def the_log_names_every_monitor(d):
+    panels_up(d)
+    log = d.logged()
+    for monitor in ("HEADLESS-1", "HEADLESS-2"):
+        check(f"monitor added monitor={monitor} " in log, f"no {monitor} in:\n{log}")
+
+
+@scenario
 def tonish_writes_its_settings_on_first_start(d):
     written = d.dir / "home" / ".config" / "tonish" / "config.toml"
     shipped = (ROOT / "assets" / "default-config.toml").read_text()

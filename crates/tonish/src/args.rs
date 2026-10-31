@@ -5,6 +5,7 @@
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use tracing::{info, warn};
 
 use crate::config;
 use crate::ipc::Message;
@@ -15,7 +16,12 @@ use crate::shell::Shell;
 
 /// A desktop shell for Wayland: panels on every monitor.
 #[derive(Debug, Parser)]
-#[command(name = "tonish", version)]
+#[command(
+    name = "tonish",
+    version,
+    after_help = "Logs go to stderr. Set TONISH_LOG to log more or less, as in TONISH_LOG=debug,\n\
+                  or per part, as in TONISH_LOG=engine=debug,info."
+)]
 pub struct Args {
     // The default is only named in the help, not set with `default_value`:
     // it depends on the environment, and `None` lets `load` tell a file asked
@@ -66,16 +72,19 @@ pub fn load(args: Args) -> Result<Shell, String> {
         std::env::var_os("HOME"),
     );
     let Some(path) = home else {
+        warn!("HOME is not set, so the built-in settings apply");
         return Ok(Shell::default());
     };
-    if let Err(e) = config::install(&path)
-        && e.kind() != std::io::ErrorKind::AlreadyExists
-    {
-        eprintln!(
-            "tonish: {}: {e}; using the built-in settings",
-            path.display()
-        );
-        return Ok(Shell::default());
+    match config::install(&path) {
+        Ok(()) => info!(file = %path.display(), "wrote the default settings"),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            warn!(
+                file = %path.display(),
+                "cannot write the settings, so the built-in ones apply: {e}"
+            );
+            return Ok(Shell::default());
+        }
     }
     Shell::read(path)
 }

@@ -11,6 +11,7 @@ calloop.workspace = true
 renderer.workspace = true
 inotify.workspace = true
 smithay-client-toolkit.workspace = true
+tracing.workspace = true
 wayland-client.workspace = true
 
 [lints]

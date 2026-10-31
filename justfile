@@ -22,6 +22,16 @@ run *args:
 build *args:
     cargo build --workspace {{ args }}
 
+# A copy of the release build rather than `cargo install`, so that installing
+# right after `just desktop` compiles nothing, and the binary goes to
+# ~/.local/bin, the user's place for programs in the XDG layout, instead of
+# ~/.cargo/bin.
+[doc("Build tonish for this machine and install it to DIR, or to ~/.local/bin if not given.")]
+[group("develop")]
+install dir="":
+    cargo build --release --locked -p tonish
+    install -Dm755 target/release/tonish "{{ if dir == "" { home_directory() / ".local" / "bin" } else { dir } }}/tonish"
+
 [doc("Format all the code with rustfmt.")]
 [group("develop")]
 fmt:
