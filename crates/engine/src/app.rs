@@ -101,4 +101,30 @@ pub trait App {
     fn changed(&mut self, _path: &Path) -> bool {
         false
     }
+
+    /// Asked once, before anything else, because the socket also keeps a
+    /// second instance in the same session from starting. `None` runs
+    /// without one.
+    fn socket(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// One line from a client, already trimmed. The engine owns the socket
+    /// and the app the meaning of the messages, so that the protocol can grow
+    /// without touching Wayland code.
+    fn message(&mut self, _text: &str) -> Reply {
+        Reply {
+            text: "error: no messages are understood".into(),
+            quit: false,
+        }
+    }
+}
+
+/// `quit` is part of the reply rather than a call the app makes, because the
+/// app has no hold on the event loop, which is what keeps it testable.
+pub struct Reply {
+    /// One line. Clients read up to the end of the connection, so a reply
+    /// that is cut short only happens when the shell dies.
+    pub text: String,
+    pub quit: bool,
 }

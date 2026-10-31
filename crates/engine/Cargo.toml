@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# The version smithay-client-toolkit uses, so that this only adds the
+# signals feature to the same crate instead of pulling in a second calloop.
+calloop.workspace = true
 renderer.workspace = true
 inotify.workspace = true
 smithay-client-toolkit.workspace = true

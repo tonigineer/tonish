@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config};
+use crate::ipc::{self, Message};
 use crate::theme::Theme;
-use engine::{self, App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
+use engine::{self, App, Layer, Output, OutputId, Paint, Reply, SurfaceId, SurfaceSpec};
 use renderer::{Circle, Point, Rect, Scene, Shape};
 use serde::Deserialize;
 
@@ -247,6 +248,23 @@ impl App for Shell {
             }
         }
     }
+
+    fn socket(&self) -> Option<PathBuf> {
+        ipc::socket_from_env()
+    }
+
+    fn message(&mut self, text: &str) -> Reply {
+        match Message::parse(text) {
+            Some(Message::Quit) => Reply {
+                text: "ok".into(),
+                quit: true,
+            },
+            None => Reply {
+                text: format!("error: unknown message {text:?}"),
+                quit: false,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -354,5 +372,18 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(!rebuild);
         assert_eq!(shell.screens[0].panels[0].anchor, Anchor::Top);
+    }
+
+    #[test]
+    fn quit_is_answered_and_ends_the_shell() {
+        let reply = Shell::default().message("quit");
+        assert_eq!((reply.text.as_str(), reply.quit), ("ok", true));
+    }
+
+    #[test]
+    fn an_unknown_message_is_an_error_and_the_shell_goes_on() {
+        let reply = Shell::default().message("reboot");
+        assert!(reply.text.starts_with("error: "), "{}", reply.text);
+        assert!(!reply.quit);
     }
 }

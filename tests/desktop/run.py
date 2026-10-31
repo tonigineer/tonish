@@ -8,6 +8,7 @@ several monitors or with scaling show up.
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -255,6 +256,68 @@ def a_broken_edit_keeps_the_panel(d):
     )
     check(d.tonish.poll() is None, f"tonish exited with {d.tonish.returncode}")
     check(d.workspaces() == before, f"room for windows changed: {d.workspaces()}")
+
+
+def socket_file(d):
+    return d.dir / "run" / f"tonish-{d.env['WAYLAND_DISPLAY']}.sock"
+
+
+def run_tonish(d, *args):
+    return subprocess.run(
+        [str(TONISH), *args],
+        env=d.env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def ended_cleanly(d):
+    check(
+        wait_for(lambda: d.tonish.poll() is not None, 3.0) is not None,
+        "tonish is still running",
+    )
+    check(d.tonish.returncode == 0, f"tonish exited with {d.tonish.returncode}")
+    check(not socket_file(d).exists(), f"{socket_file(d)} was left behind")
+    full = [(0, 0, 1920, 1080)] * 2
+    check(
+        wait_for(lambda: d.workspaces() == full, 3.0) is not None,
+        f"the panels' room is still kept: {d.workspaces()}",
+    )
+
+
+@scenario
+def msg_quit_ends_tonish(d):
+    panels_up(d)
+    sent = run_tonish(d, "msg", "quit")
+    check(sent.returncode == 0, f"tonish msg quit: {sent.stderr.strip()}")
+    # msg returns only once tonish has shut down, so the socket is gone now.
+    check(not socket_file(d).exists(), "msg quit returned before tonish ended")
+    ended_cleanly(d)
+    again = run_tonish(d, "msg", "quit")
+    check(
+        again.returncode == 1 and "no tonish answers" in again.stderr,
+        f"msg without a tonish: {again.returncode} {again.stderr.strip()}",
+    )
+
+
+@scenario
+def ctrl_c_ends_tonish_cleanly(d):
+    panels_up(d)
+    d.tonish.send_signal(signal.SIGINT)
+    ended_cleanly(d)
+
+
+@scenario
+def a_second_tonish_does_not_start(d):
+    panels_up(d)
+    second = run_tonish(d)
+    check(
+        second.returncode == 1 and "already running" in second.stderr,
+        f"second tonish: {second.returncode} {second.stderr.strip()}",
+    )
+    check(d.tonish.poll() is None, "the first tonish ended")
 
 
 @local

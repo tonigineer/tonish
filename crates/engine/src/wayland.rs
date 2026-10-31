@@ -1,6 +1,8 @@
 use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
+use calloop::signals::{Signal, Signals};
 use inotify::{Inotify, WatchDescriptor, WatchMask};
 use renderer::Scene;
 use smithay_client_toolkit::reexports::calloop::generic::Generic;
@@ -29,11 +31,15 @@ use wayland_client::{
 };
 
 use crate::app::{App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
+use crate::socket::{self, Socket};
 
-/// Returns only when something fails: nothing ends the event loop yet, so
-/// `Ok` never comes back. The errors are strings, because the only thing a
-/// caller does with them is print them.
+/// Returns `Ok` after a quit message, SIGINT (Ctrl+C) or SIGTERM, once the
+/// loop has finished what it was doing. The errors are strings, because the
+/// only thing a caller does with them is print them.
 pub fn run(app: Box<dyn App>) -> Result<(), String> {
+    // Before connecting to Wayland, so that a second instance stops before
+    // it has made a single surface.
+    let listening = app.socket().map(|path| socket::listen(&path)).transpose()?;
     let conn = Connection::connect_to_env().map_err(|e| format!("no Wayland display: {e}"))?;
     let (globals, queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
@@ -41,6 +47,43 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
     WaylandSource::new(conn.clone(), queue)
         .insert(event_loop.handle())
         .map_err(|e| e.to_string())?;
+
+    // A signalfd on the loop instead of a handler, so that a signal is
+    // handled between events like any other input and never interrupts the
+    // engine halfway through a frame.
+    let signals = Signals::new(&[Signal::SIGINT, Signal::SIGTERM]).map_err(|e| e.to_string())?;
+    event_loop
+        .handle()
+        .insert_source(signals, |_, _, engine| engine.quit = true)
+        .map_err(|e| e.error.to_string())?;
+
+    // Declared after the event loop, so that it is dropped first: the file is
+    // gone before the clients' connections close with the loop, and a client
+    // waiting for tonish to end can start a new one at once.
+    let _socket: Option<Socket> = match listening {
+        Some((listener, socket)) => {
+            let clients = event_loop.handle();
+            event_loop
+                .handle()
+                .insert_source(
+                    Generic::new(listener, Interest::READ, Mode::Level),
+                    move |_, listener, _| {
+                        while let Ok((stream, _)) = listener.accept() {
+                            let _ = stream.set_nonblocking(true);
+                            let mut line = Vec::new();
+                            let _ = clients.insert_source(
+                                Generic::new(stream, Interest::READ, Mode::Level),
+                                move |_, stream, engine| Ok(engine.client(stream, &mut line)),
+                            );
+                        }
+                        Ok(PostAction::Continue)
+                    },
+                )
+                .map_err(|e| e.error.to_string())?;
+            Some(socket)
+        }
+        None => None,
+    };
 
     let shm = Shm::bind(&globals, &qh).map_err(|_| "no wl_shm")?;
     // Watching is a convenience, so failing to set it up only costs the
@@ -52,6 +95,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
             None
         }
     };
+
     if let Some(watch) = &watch {
         // A second descriptor for polling, so that the `Inotify` itself stays
         // in the engine, where reading it needs no unsafe access through the
@@ -72,6 +116,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
             )
             .map_err(|e| e.error.to_string())?;
     }
+
     let mut engine = Engine {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -85,12 +130,19 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
         app,
         scene: Scene::new(),
         watch,
+        quit: false,
     };
-    loop {
+
+    while !engine.quit {
         event_loop
             .dispatch(None, &mut engine)
             .map_err(|e| e.to_string())?;
     }
+    // Destroys the surfaces and sends that, so the panels are gone before a
+    // client waiting for the end hears about it.
+    drop(engine);
+    let _ = conn.flush();
+    Ok(())
 }
 
 struct Surface {
@@ -148,9 +200,26 @@ struct Engine {
     app: Box<dyn App>,
     scene: Scene,
     watch: Option<Watch>,
+    quit: bool,
 }
 
 impl Engine {
+    /// The client asking to quit keeps its connection, which closes when the
+    /// process ends: its read then returns once the shell is really gone.
+    fn client(&mut self, stream: &UnixStream, line: &mut Vec<u8>) -> PostAction {
+        let Some(text) = socket::read_line(stream, line) else {
+            return PostAction::Continue;
+        };
+        let reply = self.app.message(&text);
+        socket::reply(stream, &reply.text);
+        if reply.quit {
+            self.quit = true;
+            PostAction::Disable
+        } else {
+            PostAction::Remove
+        }
+    }
+
     fn add_output(&mut self, wl: wl_output::WlOutput) {
         let Some(info) = self.output_state.info(&wl) else {
             return;

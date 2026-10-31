@@ -2,11 +2,12 @@
 //! version, 2 for a wrong command line), so whoever gets an [`Args`] can rely
 //! on a valid command line and never handles those cases.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::config;
+use crate::ipc::Message;
 use crate::shell::Shell;
 
 // clap turns the doc comments below into `--help`, so they are written for
@@ -22,6 +23,15 @@ pub struct Args {
     /// Read the settings from FILE [default: $XDG_CONFIG_HOME/tonish/config.toml]
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand, PartialEq)]
+pub enum Command {
+    /// Send a message to the tonish running in this session
+    Msg { message: Message },
 }
 
 /// Follows the XDG base directory spec, as sway and waybar do, including its
@@ -124,7 +134,7 @@ mod tests {
     fn wrong_arguments_are_errors() {
         for (args, kind) in [
             (&["--bogus"][..], ErrorKind::UnknownArgument),
-            (&["run"], ErrorKind::UnknownArgument),
+            (&["run"], ErrorKind::InvalidSubcommand),
             (&["--config"], ErrorKind::InvalidValue),
         ] {
             assert_eq!(parse(args).unwrap_err().kind(), kind, "{args:?}");
@@ -145,6 +155,23 @@ mod tests {
             "relative is ignored"
         );
         assert_eq!(at(None, None), None);
+    }
+
+    #[test]
+    fn msg_takes_one_known_message() {
+        let args = parse(&["msg", "quit"]).unwrap();
+        assert_eq!(
+            args.command,
+            Some(Command::Msg {
+                message: Message::Quit
+            })
+        );
+        for (args, kind) in [
+            (&["msg", "reboot"][..], ErrorKind::InvalidValue),
+            (&["msg"], ErrorKind::MissingRequiredArgument),
+        ] {
+            assert_eq!(parse(args).unwrap_err().kind(), kind, "{args:?}");
+        }
     }
 
     #[test]

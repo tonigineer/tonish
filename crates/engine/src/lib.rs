@@ -3,9 +3,10 @@
 //! compositor.
 
 mod app;
+mod socket;
 mod wayland;
 
-pub use app::{App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
+pub use app::{App, Layer, Output, OutputId, Paint, Reply, SurfaceId, SurfaceSpec};
 // Re-exported, so that a shell builds its surfaces and scenes with exactly
 // the versions the engine was built against.
 pub use renderer;
