@@ -8,6 +8,7 @@
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
 | sway, grim, Python 3 | `just desktop`, the scenarios on a headless sway |
+| [ruff](https://docs.astral.sh/ruff/) 0.17 | `just fmt` and `just lint` for the Python in the scenarios |
 | [mdBook](https://rust-lang.github.io/mdBook/) 0.5 | `just book`, this book |
 
 ## Recipes
@@ -17,8 +18,8 @@
 | Recipe | What it does |
 |---|---|
 | `just run` | Builds and runs tonish in your session. |
-| `just fmt` | Formats all the code. |
-| `just check` | Formatting, clippy with warnings as errors, and the tests: run it before calling a change done. |
+| `just fmt` | Formats all the code: Rust with rustfmt, Python with ruff. |
+| `just check` | Formatting, clippy and ruff with warnings as errors, and the tests: run it before calling a change done. |
 | `just check-all` | `just check`, then the desktop scenarios: everything a pull request checks in code. |
 | `just desktop [filter]` | Runs the [desktop scenarios](testing.md#desktop-scenarios), or only those whose name contains `filter`. |
 | `just bench`, `just bench-save`, `just bench-compare` | [Benchmark](drawing.md#measuring) the renderer, and compare against a saved baseline. |

@@ -32,10 +32,11 @@ install dir="":
     cargo build --release --locked -p tonish
     install -Dm755 target/release/tonish "{{ if dir == "" { home_directory() / ".local" / "bin" } else { dir } }}/tonish"
 
-[doc("Format all the code with rustfmt.")]
+[doc("Format all the code: Rust with rustfmt, Python with ruff.")]
 [group("develop")]
 fmt:
     cargo fmt --all
+    ruff format
 
 [doc("Remove what building and testing left.")]
 [group("develop")]
@@ -45,11 +46,13 @@ clean:
 
 # ── Check ─────────────────────────────────────────────────────────────────────
 
-[doc("Check the formatting, and run clippy with warnings as errors.")]
+[doc("Check the formatting, and lint with clippy and ruff, with warnings as errors.")]
 [group("check")]
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --release -- -D warnings
+    ruff format --check
+    ruff check
 
 [doc("Run the unit tests with nextest, then the doctests.")]
 [group("check")]

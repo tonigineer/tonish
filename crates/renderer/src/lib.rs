@@ -6,5 +6,5 @@ pub mod scene;
 pub mod shapes;
 pub mod snapshot;
 
-pub use scene::{Orientation, Point, Rgba, Scene};
+pub use scene::{Point, Rgba, Scene};
 pub use shapes::{Circle, Rect, Shape};

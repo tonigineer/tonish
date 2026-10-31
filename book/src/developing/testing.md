@@ -31,6 +31,6 @@ A pull request into `main` runs these jobs:
 | Job | What it checks |
 |---|---|
 | Version raised | The version is newer than on `main`, except for branches named `fix/*`. |
-| Lint | Formatting and clippy, and that the API documentation and this book build. |
+| Lint | Formatting, clippy and ruff, and that the API documentation and this book build. |
 | Build | The tests, then the release build, packaged as it would be released. |
 | Desktop | The general scenarios, in an Arch Linux container, with the packaged binary. |

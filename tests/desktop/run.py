@@ -39,7 +39,7 @@ def check(ok, what):
 
 def near(a, b, by=6):
     """Scaling blurs edges by a few steps, hence the tolerance."""
-    return len(a) == len(b) and all(abs(x - y) <= by for x, y in zip(a, b))
+    return len(a) == len(b) and all(abs(x - y) <= by for x, y in zip(a, b, strict=True))
 
 
 def wait_for(cond, seconds, step=0.02):
@@ -91,7 +91,9 @@ class Desktop:
         self.env["WAYLAND_DISPLAY"] = (self.dir / "display").read_text()
         socks = list(run.glob(f"sway-ipc.*.{self.sway.pid}.sock"))
         self.env["SWAYSOCK"] = str(socks[0]) if socks else ""
-        self.log = open(self.dir / "tonish.log", "w")
+        # Open for as long as tonish runs, which outlives any `with` here;
+        # close() closes it.
+        self.log = open(self.dir / "tonish.log", "w")  # noqa: SIM115
         self.tonish = subprocess.Popen(
             [str(TONISH)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT
         )
