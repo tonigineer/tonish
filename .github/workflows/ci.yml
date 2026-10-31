@@ -28,7 +28,11 @@ jobs:
 
   desktop:
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    container:
+      image: archlinux:latest
+      # grim's screenshots of a failure go through shared memory; the 64 MB
+      # a container gets by default is too little for two 4K monitors.
+      options: --shm-size=1g
     steps:
       - run: pacman -Syu --noconfirm --needed git rustup gcc pkgconf wayland sway grim python just > /dev/null
       # sway carries cap_sys_nice; a container may not run a binary with a capability.

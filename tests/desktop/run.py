@@ -4,6 +4,9 @@ own (two 3840×2160 monitors at scale 2) and checks what it does there.
 
     tests/desktop/run.py [FILTER]     scenarios whose name holds FILTER
 
+With CI set in the environment, as on GitHub, only the general scenarios
+run; the ones about how panels look are left to local runs.
+
 Nothing of the real desktop is used: a fresh HOME, XDG folders and runtime
 folder, sway drawing into memory. Screenshots of failures go to
 tests/desktop/out/.
@@ -129,22 +132,43 @@ class Desktop:
 
 SCENARIOS = []
 
+# On CI (GitHub sets CI), only the general scenarios run: tonish starts and
+# behaves like a shell. How exactly its panels look is checked locally only,
+# so that changing a panel does not need a round trip through CI.
+ON_CI = bool(os.environ.get("CI"))
+
 
 def scenario(f):
-    SCENARIOS.append(f)
+    """A general scenario, run everywhere."""
+    SCENARIOS.append((f, False))
+    return f
+
+
+def local(f):
+    """A scenario about the details of a panel, run locally only."""
+    SCENARIOS.append((f, True))
     return f
 
 
 # ── Scenarios ───────────────────────────────────────────────────────────────
 
 @scenario
-def the_bar_keeps_its_room_at_the_top_of_every_monitor(d):
-    """Windows start under the bar, 44 px down, on both monitors."""
+def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
+    """Windows start some way down on both monitors, and tonish keeps running."""
+    def kept(rooms):
+        return len(rooms) == 2 and all(x == 0 and y > 0 and w == 1920 and y + h == 1080 for x, y, w, h in rooms)
+    check(wait_for(lambda: kept(d.workspaces()), 3.0) is not None, f"room for windows: {d.workspaces()}")
+    check(d.tonish.poll() is None, f"tonish exited with {d.tonish.returncode}")
+
+
+@local
+def the_bar_is_44_px_high(d):
+    """Windows start under the bar, exactly 44 px down, on both monitors."""
     want = [(0, 44, 1920, 1080 - 44)] * 2
     check(wait_for(lambda: d.workspaces() == want, 3.0) is not None, f"room for windows: {d.workspaces()}")
 
 
-@scenario
+@local
 def the_bar_is_drawn_with_its_logo(d):
     """The bar's ground along the top, the logo's dot at its start, the desktop under it."""
     surface, primary = (0x11, 0x13, 0x18), (0xc9, 0xa9, 0x6e)
@@ -158,11 +182,14 @@ def main():
         raise SystemExit(f"{TONISH}: build it first (cargo build --release)")
     filt = sys.argv[1] if len(sys.argv) > 1 else ""
     failed = 0
-    for f in SCENARIOS:
+    for f, local_only in SCENARIOS:
         if filt and filt not in f.__name__:
             continue
-        d = Desktop()
         name = f.__name__.replace("_", " ")
+        if local_only and ON_CI:
+            print(f"  - {name} (local only)")
+            continue
+        d = Desktop()
         try:
             f(d)
             print(f"  ✓ {name}")
