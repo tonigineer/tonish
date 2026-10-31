@@ -2,9 +2,9 @@ use super::Shape;
 use crate::scene::{Point, Rgba};
 
 /// `p0` has to be the top-left corner and `p1` the bottom-right one. They are
-/// not normalised, because every caller already knows their order and
-/// `distance` runs once per pixel; swapped corners give wrong bounds and
-/// distances.
+/// not normalised, because every caller already knows their order, and
+/// [`Shape::distance`] and [`Shape::inside`] run for every edge pixel and
+/// every row; swapped corners give wrong bounds, distances and stretches.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub p0: Point,

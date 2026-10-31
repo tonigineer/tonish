@@ -59,16 +59,21 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install just
+      - name: Install just and mdBook
         uses: taiki-e/install-action@v2
         with:
-          tool: just
+          tool: just,mdbook@0.5
 
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
 
       - name: Lint
         run: just lint
+
+      # Here rather than in a job of its own, which would need the toolchain
+      # and the cache again.
+      - name: Build the docs and the book
+        run: just book
 
   build:
     name: Build

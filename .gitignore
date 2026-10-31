@@ -1,3 +1,4 @@
 /target/
 tests/desktop/out/
+/book/build/
 __pycache__/

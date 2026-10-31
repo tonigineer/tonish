@@ -41,7 +41,7 @@ fmt:
 [group("develop")]
 clean:
     cargo clean
-    rm -rf tests/desktop/out
+    rm -rf tests/desktop/out book/build
 
 # ── Check ─────────────────────────────────────────────────────────────────────
 
@@ -87,6 +87,27 @@ bench-save name="before":
 [group("bench")]
 bench-compare name="before":
     cargo bench -p renderer --bench draw -- --baseline {{ name }}
+
+# ── Docs ──────────────────────────────────────────────────────────────────────
+
+# Private items too, because most of the engine is private and that is the
+# part a developer reads the API documentation for.
+[doc("Build the API documentation into target/doc, with warnings as errors. --open shows it.")]
+[group("docs")]
+doc *args:
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items {{ args }}
+
+[doc("Build the book, with the API documentation under api/, into book/build.")]
+[group("docs")]
+book: doc
+    mdbook build book
+    rm -rf book/build/api
+    cp -r target/doc book/build/api
+
+[doc("Serve the book at http://localhost:3000 and rebuild it on every change, without the API documentation.")]
+[group("docs")]
+book-serve:
+    mdbook serve book --open
 
 # ── Release ───────────────────────────────────────────────────────────────────
 
