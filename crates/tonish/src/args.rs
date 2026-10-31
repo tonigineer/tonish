@@ -49,7 +49,7 @@ fn default_config(xdg_config_home: Option<OsString>, home: Option<OsString>) -> 
 /// falling back would look as if the edits had been ignored.
 pub fn load(args: Args) -> Result<Shell, String> {
     if let Some(path) = args.config {
-        return config::read(&path).map(Shell::new);
+        return Shell::read(path);
     }
     let home = default_config(
         std::env::var_os("XDG_CONFIG_HOME"),
@@ -67,7 +67,7 @@ pub fn load(args: Args) -> Result<Shell, String> {
         );
         return Ok(Shell::default());
     }
-    config::read(&path).map(Shell::new)
+    Shell::read(path)
 }
 
 #[cfg(test)]

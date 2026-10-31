@@ -14,6 +14,7 @@ clap = { version = "4.6", features = ["derive"] }
 criterion = { version = "0.8.2", default-features = false, features = [
     "cargo_bench_support",
 ] }
+inotify = "0.11"
 png = "0.18.1"
 serde = { version = "1", features = ["derive"] }
 smithay-client-toolkit = { version = "0.19.2", default-features = false, features = [

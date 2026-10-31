@@ -1,4 +1,10 @@
+use std::os::fd::AsFd;
+use std::path::{Path, PathBuf};
+
+use inotify::{Inotify, WatchDescriptor, WatchMask};
 use renderer::Scene;
+use smithay_client_toolkit::reexports::calloop::generic::Generic;
+use smithay_client_toolkit::reexports::calloop::{Interest, Mode, PostAction};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
@@ -37,6 +43,35 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let shm = Shm::bind(&globals, &qh).map_err(|_| "no wl_shm")?;
+    // Watching is a convenience, so failing to set it up only costs the
+    // reloading, not the shell.
+    let watch = match Watch::new(app.watched()) {
+        Ok(watch) => watch,
+        Err(e) => {
+            eprintln!("cannot watch for changes, so edits apply after a restart: {e}");
+            None
+        }
+    };
+    if let Some(watch) = &watch {
+        // A second descriptor for polling, so that the `Inotify` itself stays
+        // in the engine, where reading it needs no unsafe access through the
+        // event source.
+        let fd = watch
+            .inotify
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|e| e.to_string())?;
+        event_loop
+            .handle()
+            .insert_source(
+                Generic::new(fd, Interest::READ, Mode::Level),
+                |_, _, engine| {
+                    engine.files_changed();
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| e.error.to_string())?;
+    }
     let mut engine = Engine {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -49,6 +84,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
         outs: Vec::new(),
         app,
         scene: Scene::new(),
+        watch,
     };
     loop {
         event_loop
@@ -71,6 +107,35 @@ struct Out {
     surfaces: Vec<Surface>,
 }
 
+struct Watch {
+    inotify: Inotify,
+    files: Vec<(WatchDescriptor, PathBuf)>,
+}
+
+impl Watch {
+    fn new(paths: Vec<PathBuf>) -> std::io::Result<Option<Self>> {
+        if paths.is_empty() {
+            return Ok(None);
+        }
+        let inotify = Inotify::init()?;
+        let mut files = Vec::new();
+        for path in paths {
+            let dir = match path.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => dir,
+                _ => Path::new("."),
+            };
+            // CLOSE_WRITE rather than MODIFY, so that a file is read once it
+            // is complete and not halfway through a write; MOVED_TO for
+            // editors that rename a new file over the old one.
+            let wd = inotify
+                .watches()
+                .add(dir, WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO)?;
+            files.push((wd, path));
+        }
+        Ok(Some(Self { inotify, files }))
+    }
+}
+
 struct Engine {
     registry_state: RegistryState,
     output_state: OutputState,
@@ -82,6 +147,7 @@ struct Engine {
     outs: Vec<Out>,
     app: Box<dyn App>,
     scene: Scene,
+    watch: Option<Watch>,
 }
 
 impl Engine {
@@ -144,6 +210,54 @@ impl Engine {
             spec,
             size: (0, 0),
             configured: false,
+        }
+    }
+
+    /// Collects every event before telling the app, so that one save that
+    /// arrives as several events reaches it once.
+    fn files_changed(&mut self) {
+        let Some(watch) = &mut self.watch else {
+            return;
+        };
+        let mut changed: Vec<PathBuf> = Vec::new();
+        let mut buffer = [0; 4096];
+        while let Ok(events) = watch.inotify.read_events(&mut buffer) {
+            let mut any = false;
+            for event in events {
+                any = true;
+                let hit = watch.files.iter().find(|(wd, path)| {
+                    *wd == event.wd && event.name.is_some() && event.name == path.file_name()
+                });
+                if let Some((_, path)) = hit
+                    && !changed.contains(path)
+                {
+                    changed.push(path.clone());
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+        let mut rebuild = false;
+        for path in &changed {
+            rebuild |= self.app.changed(path);
+        }
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// The old surfaces are destroyed as they are dropped; the new ones are
+    /// drawn once the compositor configures them, as on a first start.
+    fn rebuild(&mut self) {
+        for oi in 0..self.outs.len() {
+            let wl = self.outs[oi].wl.clone();
+            let specs = self.app.surfaces(&self.outs[oi].info);
+            let surfaces = specs
+                .into_iter()
+                .map(|spec| self.layer(&wl, spec))
+                .collect();
+            self.outs[oi].surfaces = surfaces;
         }
     }
 

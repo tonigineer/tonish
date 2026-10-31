@@ -67,3 +67,77 @@ pub fn install(path: &Path) -> std::io::Result<()> {
         .open(path)?
         .write_all(DEFAULT.as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::{Anchor, Shell};
+
+    #[test]
+    fn the_shipped_settings_are_a_horizontal_panel_44_pixels_thick() {
+        let want = Config {
+            orientation: Orientation::Horizontal,
+            thickness: 44.0,
+        };
+        assert_eq!(Config::default(), want);
+    }
+
+    #[test]
+    fn a_vertical_panel_runs_down_the_left() {
+        let shell = Shell::new(parse("orientation = \"vertical\"\nthickness = 30").unwrap());
+        let panel = &shell.screens[0].panels[0];
+        assert_eq!(
+            (panel.anchor, panel.orientation, panel.thickness),
+            (Anchor::Left, Orientation::Vertical, 30.0)
+        );
+    }
+
+    #[test]
+    fn both_settings_are_needed() {
+        let err = parse("thickness = 44").unwrap_err();
+        assert!(err.contains("missing field `orientation`"), "{err}");
+    }
+
+    #[test]
+    fn a_misspelt_setting_is_an_error_naming_it_and_its_line() {
+        let err = parse("orientation = \"vertical\"\nthicknes = 44\n").unwrap_err();
+        assert!(err.contains("thicknes") && err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn wrong_values_are_errors() {
+        for (text, says) in [
+            ("orientation = \"diagonal\"\nthickness = 44", "diagonal"),
+            ("orientation = \"vertical\"\nthickness = 0", "less than 1"),
+            ("orientation = \"vertical\"\nthickness = -4", "less than 1"),
+            (
+                "orientation = \"vertical\"\nthickness = \"wide\"",
+                "thickness",
+            ),
+        ] {
+            let err = parse(text).unwrap_err();
+            assert!(err.contains(says), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn errors_name_the_file() {
+        let err = read(Path::new("/nonexistent/tonish.toml")).unwrap_err();
+        assert!(err.starts_with("/nonexistent/tonish.toml: "), "{err}");
+    }
+
+    #[test]
+    fn install_writes_the_shipped_file_and_never_overwrites_one() {
+        let dir = std::env::temp_dir().join(format!("tonish-install-{}", std::process::id()));
+        let path = dir.join("tonish").join("config.toml");
+        install(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT);
+
+        fs::write(&path, "thickness = 30").unwrap();
+        let again = install(&path).unwrap_err().kind();
+        let kept = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(again, std::io::ErrorKind::AlreadyExists);
+        assert_eq!(kept, "thickness = 30");
+    }
+}

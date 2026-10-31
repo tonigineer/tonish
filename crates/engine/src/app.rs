@@ -1,5 +1,6 @@
 use renderer::Scene;
 use smithay_client_toolkit::shell::wlr_layer::Anchor;
+use std::path::{Path, PathBuf};
 
 /// The wl_output's global name, so that a shell can key per-monitor state on
 /// it for as long as the monitor stays connected. A monitor plugged in again
@@ -82,4 +83,22 @@ pub trait App {
     /// There is no way yet for a shell to ask for a redraw, so anything that
     /// changes on its own, such as a clock, needs that first.
     fn draw(&mut self, output: OutputId, surface: SurfaceId, paint: &mut Paint);
+
+    /// Asked once, before the first output appears, so the set of files is
+    /// fixed for the whole run. The engine watches their folders rather than
+    /// the files, because editors save by writing a new file and renaming it
+    /// over the old one, and a watch on the old file would go quiet.
+    fn watched(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// `true` makes the engine destroy every surface and ask
+    /// [`App::surfaces`] again. Rebuilding is the one way to apply any
+    /// change, since a layer surface's namespace can never change and its
+    /// layer only with a newer protocol version than the engine uses. A save
+    /// that changes nothing should return `false`, because a rebuild makes
+    /// the panels blink.
+    fn changed(&mut self, _path: &Path) -> bool {
+        false
+    }
 }

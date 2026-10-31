@@ -193,6 +193,7 @@ def tonish_starts_and_keeps_room_at_the_top_of_every_monitor(d):
     check(d.tonish.poll() is None, f"tonish exited with {d.tonish.returncode}")
 
 
+@scenario
 def tonish_writes_its_settings_on_first_start(d):
     written = d.dir / "home" / ".config" / "tonish" / "config.toml"
     shipped = (ROOT / "assets" / "default-config.toml").read_text()
@@ -201,6 +202,59 @@ def tonish_writes_its_settings_on_first_start(d):
         is not None,
         f"{written} is missing or differs from assets/default-config.toml",
     )
+
+
+def settings_file(d):
+    return d.dir / "home" / ".config" / "tonish" / "config.toml"
+
+
+def panels_up(d):
+    """Once the panels reserve room, the engine is past setting up its watch,
+    so an edit from here on cannot be missed."""
+
+    def up(rooms):
+        return len(rooms) == 2 and all(y > 0 or x > 0 for x, y, w, h in rooms)
+
+    check(
+        wait_for(lambda: up(d.workspaces()), 3.0) is not None,
+        f"room for windows: {d.workspaces()}",
+    )
+
+
+@scenario
+def editing_the_settings_moves_the_panel(d):
+    panels_up(d)
+    path = settings_file(d)
+    # Most editors write a new file and rename it over the old one.
+    new = path.with_name("config.toml.new")
+    new.write_text('orientation = "vertical"\nthickness = 30\n')
+    os.replace(new, path)
+    left = [(30, 0, 1920 - 30, 1080)] * 2
+    check(
+        wait_for(lambda: d.workspaces() == left, 3.0) is not None,
+        f"after a rename: {d.workspaces()}",
+    )
+    # Others write into the file itself.
+    path.write_text('orientation = "horizontal"\nthickness = 60\n')
+    top = [(0, 60, 1920, 1080 - 60)] * 2
+    check(
+        wait_for(lambda: d.workspaces() == top, 3.0) is not None,
+        f"after a write in place: {d.workspaces()}",
+    )
+
+
+@scenario
+def a_broken_edit_keeps_the_panel(d):
+    panels_up(d)
+    before = d.workspaces()
+    settings_file(d).write_text('orientation = "vertical"\nthickness = 0\n')
+    check(
+        wait_for(lambda: "keeping the settings from before" in d.logged(), 3.0)
+        is not None,
+        "tonish did not report the broken file",
+    )
+    check(d.tonish.poll() is None, f"tonish exited with {d.tonish.returncode}")
+    check(d.workspaces() == before, f"room for windows changed: {d.workspaces()}")
 
 
 @local
