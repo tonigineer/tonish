@@ -7,7 +7,8 @@
 | Rust, current stable | everything; the workspace uses edition 2024 |
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
-| sway, grim, Python 3 | `just desktop`, the scenarios on a headless sway |
+| sway, grim | `just desktop`, the tests on a headless sway |
+| [uv](https://docs.astral.sh/uv/) | The Python tools: pytest for `just desktop`, ruff for `just fmt` and `just lint`. uv installs them at the versions in `uv.lock`. |
 | [mdBook](https://rust-lang.github.io/mdBook/) 0.5 | `just book`, this book |
 
 ## Recipes
@@ -17,10 +18,10 @@
 | Recipe | What it does |
 |---|---|
 | `just run` | Builds and runs tonish in your session. |
-| `just fmt` | Formats all the code. |
-| `just check` | Formatting, clippy with warnings as errors, and the tests: run it before calling a change done. |
-| `just check-all` | `just check`, then the desktop scenarios: everything a pull request checks in code. |
-| `just desktop [filter]` | Runs the [desktop scenarios](testing.md#desktop-scenarios), or only those whose name contains `filter`. |
+| `just fmt` | Formats all the code: Rust with rustfmt, Python with ruff. |
+| `just check` | Formatting, clippy and ruff with warnings as errors, and the tests: run it before calling a change done. |
+| `just check-all` | `just check`, then the desktop tests: everything a pull request checks in code. |
+| `just desktop [args]` | Runs the [desktop tests](testing.md#desktop-tests). Arguments go to pytest, such as `-k redraw` or `--lf`. |
 | `just bench`, `just bench-save`, `just bench-compare` | [Benchmark](drawing.md#measuring) the renderer, and compare against a saved baseline. |
 | `just doc` | Builds the [API documentation](api.md), private items included, with warnings as errors. |
 | `just book` | Builds this book, with the API documentation inside it, into `book/build`. |
@@ -36,7 +37,8 @@
 | `crates/engine` | The Wayland side: monitors, layer surfaces, the event loop, the socket, file watching. |
 | `crates/tonish` | The shell: panels, settings, the command line, messages, logging. |
 | `assets/default-config.toml` | The default settings, compiled into tonish and written on its first start. |
-| `tests/desktop/run.py` | The desktop scenarios. |
+| `tests/desktop/` | The desktop tests, for pytest. |
+| `pyproject.toml`, `uv.lock` | The Python tools for the desktop tests, their versions and their settings. |
 | `book/` | This book. |
 | `.github/workflows/` | CI for pull requests, releases, and the book's site. |
 | `.cargo/config.toml` | Builds for the CPU you build on, which suits benchmarks. Releases override it. |

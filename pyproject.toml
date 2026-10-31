@@ -1,0 +1,30 @@
+# The Python here is only the desktop tests and the tools for them; tonish
+# itself is Rust. uv installs the tools at the versions in uv.lock, the same
+# on every machine and in CI.
+[project]
+name = "tonish-desktop-tests"
+version = "0"
+# CI's Ubuntu has 3.12, and the lint job runs ruff through uv there.
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = ["pytest>=9.2", "ruff>=0.17"]
+
+[tool.uv]
+# Nothing here is a package to build or install.
+package = false
+
+[tool.ruff.lint]
+# On top of ruff's defaults, which leave line length to the formatter:
+# likely bugs (bugbear), import order (isort), outdated syntax (pyupgrade)
+# and pytest's own conventions (PT).
+extend-select = ["B", "I", "PT", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/desktop"]
+# A misspelt marker is an error, instead of a mark that selects nothing.
+addopts = ["--strict-markers"]
+# CI runs only the general tests, with -m "not local". How exactly panels look
+# is checked locally, so that changing a panel does not need a round trip
+# through CI.
+markers = ["local: how panels look, down to the pixel; CI leaves these out"]

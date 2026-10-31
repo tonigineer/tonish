@@ -17,6 +17,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # As --locked does for cargo: an outdated uv.lock is an error, instead of
+  # being rewritten on the runner.
+  UV_LOCKED: 1
 
 jobs:
   # Each merge into main is a release, so its version has to be new. Branches
@@ -47,8 +50,14 @@ jobs:
             exit 1
           }
 
+  # Every job waits for the version check, so that a forgotten `just bump`
+  # stops a pull request before it spends minutes on anything else. The
+  # condition lets the job run when the check passed or was skipped, as for
+  # fix/* branches: without it, a skipped need would skip this job too.
   lint:
     name: Lint
+    needs: version
+    if: ${{ !cancelled() && needs.version.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -59,10 +68,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install just and mdBook
+      - name: Install just, mdBook and uv
         uses: taiki-e/install-action@v2
         with:
-          tool: just,mdbook@0.5
+          tool: just,mdbook@0.5,uv
 
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
@@ -77,13 +86,18 @@ jobs:
 
   build:
     name: Build
+    needs: version
+    if: ${{ !cancelled() && needs.version.result != 'failure' }}
     uses: ./.github/workflows/build.yml
 
-  # Runs the packaged binary, so that the scenarios test what a merge would
+  # Runs the packaged binary, so that the desktop tests check what a merge would
   # release and nothing is compiled twice.
   desktop:
     name: Desktop
     needs: build
+    # Explicit, because a skipped version check further up would otherwise
+    # skip this job as well, even after a successful build.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -91,8 +105,8 @@ jobs:
       # a container gets by default is too little for two 4K monitors.
       options: --shm-size=1g
     steps:
-      - name: Install sway, grim and Python
-        run: pacman -Syu --noconfirm --needed sway grim python > /dev/null
+      - name: Install sway, grim, Python and uv
+        run: pacman -Syu --noconfirm --needed sway grim python uv > /dev/null
 
       # sway carries cap_sys_nice; a container may not run a binary with a
       # capability.
@@ -114,8 +128,8 @@ jobs:
           mkdir -p target/release
           tar xzf dist/tonish-*.tar.gz --strip-components=1 -C target/release
 
-      - name: Run the desktop scenarios
-        run: python3 tests/desktop/run.py
+      - name: Run the desktop tests
+        run: uv run pytest -m "not local"
 
       - name: Keep the screenshots of failures
         if: failure()

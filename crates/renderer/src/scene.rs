@@ -47,21 +47,6 @@ impl Rgba {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum Orientation {
-    #[default]
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-impl Orientation {
-    pub fn is_vertical(self) -> bool {
-        matches!(self, Orientation::Left | Orientation::Right)
-    }
-}
-
 /// In logical pixels, so that layout never depends on the output's scale.
 /// `f32`, because edges fall between physical pixels, scales can be
 /// fractional, and animated positions move by fractions of a pixel.
@@ -143,12 +128,6 @@ mod tests {
         assert_eq!(white().alpha(1.25).a, 255);
         assert_eq!(white().alpha(-0.25).a, 0);
         assert_eq!(Rgba::from_rgb(1, 2, 3, 2.0), Rgba::from_rgb(1, 2, 3, 1.0));
-    }
-
-    #[test]
-    fn only_left_and_right_are_vertical() {
-        assert!(Orientation::Left.is_vertical() && Orientation::Right.is_vertical());
-        assert!(!Orientation::Top.is_vertical() && !Orientation::Bottom.is_vertical());
     }
 
     #[test]

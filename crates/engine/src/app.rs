@@ -80,10 +80,18 @@ pub trait App {
     /// monitor without any.
     fn surfaces(&mut self, output: &Output) -> Vec<SurfaceSpec>;
 
-    /// Called only when the compositor configures a surface with a new size.
-    /// There is no way yet for a shell to ask for a redraw, so anything that
-    /// changes on its own, such as a clock, needs that first.
+    /// Called when the compositor configures a surface with a new size, and
+    /// for every surface [`App::to_redraw`] names. The scene starts empty
+    /// each time, so `draw` paints the whole surface, not what changed.
     fn draw(&mut self, output: OutputId, surface: SurfaceId, paint: &mut Paint);
+
+    /// Asked after every batch of events, whatever they were, so that any of
+    /// the app's methods can lead to a redraw: the app keeps what changed
+    /// until it is asked, and hands it over by taking it. A surface named
+    /// several times in one batch is drawn once.
+    fn to_redraw(&mut self) -> Redraw {
+        Redraw::Nothing
+    }
 
     /// Asked once, before the first output appears, so the set of files is
     /// fixed for the whole run. The engine watches their folders rather than
@@ -119,6 +127,19 @@ pub trait App {
             quit: false,
         }
     }
+}
+
+/// `Everything` is a variant of its own so that an app need not list its
+/// surfaces to draw them all.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Redraw {
+    #[default]
+    Nothing,
+    Everything,
+    /// Surfaces that are gone by the time the engine asks, or that the
+    /// compositor has not configured yet, are skipped; a configure draws them
+    /// anyway.
+    Surfaces(Vec<(OutputId, SurfaceId)>),
 }
 
 /// `quit` is part of the reply rather than a call the app makes, because the

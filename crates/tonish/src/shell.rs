@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, Config};
 use crate::ipc::{self, Message};
 use crate::theme::Theme;
-use engine::{self, App, Layer, Output, OutputId, Paint, Reply, SurfaceId, SurfaceSpec};
+use engine::{self, App, Layer, Output, OutputId, Paint, Redraw, Reply, SurfaceId, SurfaceSpec};
 use renderer::{Circle, Point, Rect, Scene, Shape};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
@@ -25,6 +25,7 @@ pub struct Shell {
     config: Config,
     file: Option<PathBuf>,
     monitors: HashMap<OutputId, Option<String>>,
+    redraw: Redraw,
 }
 
 pub struct Screen {
@@ -75,6 +76,7 @@ impl Shell {
             config,
             file: None,
             monitors: HashMap::new(),
+            redraw: Redraw::Nothing,
         }
     }
 
@@ -261,6 +263,10 @@ impl App for Shell {
         }
     }
 
+    fn to_redraw(&mut self) -> Redraw {
+        std::mem::take(&mut self.redraw)
+    }
+
     fn socket(&self) -> Option<PathBuf> {
         ipc::socket_from_env()
     }
@@ -271,6 +277,13 @@ impl App for Shell {
                 text: "ok".into(),
                 quit: true,
             },
+            Some(Message::Redraw) => {
+                self.redraw = Redraw::Everything;
+                Reply {
+                    text: "ok".into(),
+                    quit: false,
+                }
+            }
             None => Reply {
                 text: format!("error: unknown message {text:?}"),
                 quit: false,
@@ -390,6 +403,16 @@ mod tests {
     fn quit_is_answered_and_ends_the_shell() {
         let reply = Shell::default().message("quit");
         assert_eq!((reply.text.as_str(), reply.quit), ("ok", true));
+    }
+
+    #[test]
+    fn redraw_is_answered_and_draws_everything_once() {
+        let mut shell = Shell::default();
+        assert_eq!(shell.to_redraw(), Redraw::Nothing);
+        let reply = shell.message("redraw");
+        assert_eq!((reply.text.as_str(), reply.quit), ("ok", false));
+        assert_eq!(shell.to_redraw(), Redraw::Everything);
+        assert_eq!(shell.to_redraw(), Redraw::Nothing, "taken by the first ask");
     }
 
     #[test]

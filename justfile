@@ -32,24 +32,27 @@ install dir="":
     cargo build --release --locked -p tonish
     install -Dm755 target/release/tonish "{{ if dir == "" { home_directory() / ".local" / "bin" } else { dir } }}/tonish"
 
-[doc("Format all the code with rustfmt.")]
+[doc("Format all the code: Rust with rustfmt, Python with ruff.")]
 [group("develop")]
 fmt:
     cargo fmt --all
+    uv run ruff format
 
 [doc("Remove what building and testing left.")]
 [group("develop")]
 clean:
     cargo clean
-    rm -rf tests/desktop/out book/build
+    rm -rf tests/desktop/out book/build .venv .pytest_cache .ruff_cache
 
 # ── Check ─────────────────────────────────────────────────────────────────────
 
-[doc("Check the formatting, and run clippy with warnings as errors.")]
+[doc("Check the formatting, and lint with clippy and ruff, with warnings as errors.")]
 [group("check")]
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --release -- -D warnings
+    uv run ruff format --check
+    uv run ruff check
 
 [doc("Run the unit tests with nextest, then the doctests.")]
 [group("check")]
@@ -57,17 +60,18 @@ test:
     cargo nextest run --workspace --release --no-tests=pass
     cargo test --workspace --release --doc
 
-[doc("Lint, then test: the code checks of a pull request, short of the desktop scenarios.")]
+[doc("Lint, then test: the code checks of a pull request, short of the desktop tests.")]
 [group("check")]
 check: lint test
 
-[doc("Run the desktop scenarios: tonish on a headless sway. FILTER: part of a scenario's name. Needs sway and grim.")]
+[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim and uv.")]
 [group("check")]
-desktop filter="":
+[positional-arguments]
+desktop *args:
     cargo build --release -p tonish
-    python3 tests/desktop/run.py {{ filter }}
+    uv run pytest "$@"
 
-[doc("All the code checks of a pull request: check, then the desktop scenarios.")]
+[doc("All the code checks of a pull request: check, then the desktop tests.")]
 [group("check")]
 check-all: check desktop
 
