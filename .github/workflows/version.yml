@@ -1,0 +1,53 @@
+# Every pull request into main has to raise the workspace version, so that
+# each merge is a release. Branches named fix/* are exempt: they merge
+# without a release and go out with the next version that is raised.
+#
+# A failing check only blocks merging once "Version raised" is a required
+# status check in a ruleset or branch protection rule for main. A job skipped
+# by its condition, as for fix/* branches, counts as passed there.
+name: Version
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  raised:
+    name: Version raised
+    if: ${{ !startsWith(github.head_ref, 'fix/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The base branch has to be there to compare against.
+          fetch-depth: 0
+
+      - name: Newer than on the base branch
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          version() { sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p'; }
+          old=$(git show "origin/$BASE:Cargo.toml" | version)
+          new=$(version < Cargo.toml)
+          if [ -z "$old" ] || [ -z "$new" ]; then
+            echo "::error file=Cargo.toml::no version in [workspace.package]"
+            exit 1
+          fi
+          # sort -V orders plain X.Y.Z versions correctly, but would put a
+          # pre-release such as 1.0.0-rc.1 after 1.0.0.
+          if [ "$new" = "$old" ] || [ "$(printf '%s\n' "$old" "$new" | sort -V | tail -n 1)" != "$new" ]; then
+            echo "::error file=Cargo.toml::version $new is not newer than $old on $BASE: raise it with just bump, or name the branch fix/..."
+            exit 1
+          fi
+          echo "version $old -> $new"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The release builds with --locked, which fails after merging if the
+      # version was raised without `cargo update --workspace` (`just bump`
+      # does both). Catching it here keeps main releasable.
+      - name: Cargo.lock matches the version
+        run: cargo metadata --locked --format-version 1 > /dev/null

@@ -1,0 +1,79 @@
+# Every push to main whose version has not been released yet becomes a
+# GitHub release tagged vX.Y.Z, with a Linux binary. A push that keeps the
+# version, such as a merged fix/* branch, releases nothing: its changes go
+# out with the next version that is raised.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Two merges in quick succession must not race to publish the same release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    env:
+      # .cargo/config.toml builds for the local CPU, which suits benchmarks
+      # but not a binary meant to run on other machines. x86-64-v2 runs on
+      # practically every x86-64 CPU still in use.
+      RUSTFLAGS: -C target-cpu=x86-64-v2
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Version
+        id: version
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error file=Cargo.toml::no version in [workspace.package]"
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "$tag is released already; nothing to do."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.version.outputs.new == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      # Tested again here, with the flags the binary is built with, so that
+      # nothing is released that fails on the runner.
+      - name: Test
+        if: steps.version.outputs.new == 'true'
+        run: cargo test --workspace --release --locked
+
+      - name: Build
+        if: steps.version.outputs.new == 'true'
+        run: cargo build --release --locked -p tonish
+
+      - name: Package
+        if: steps.version.outputs.new == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          name="tonish-$TAG-x86_64-linux"
+          mkdir "$name"
+          cp target/release/tonish "$name/"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: Publish
+        if: steps.version.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes \
+            tonish-*.tar.gz tonish-*.tar.gz.sha256

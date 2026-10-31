@@ -46,3 +46,44 @@ test:
 # [group("release")]
 # clean:
 #     cargo clean
+
+# ── Release ───────────────────────────────────────────────────────
+
+[doc("Print the workspace version, or the one committed at REF if given.")]
+[group("release")]
+version ref="":
+    @{{ if ref == "" { "cat Cargo.toml" } else { "git show " + ref + ":Cargo.toml" } }} | sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p'
+
+[doc("Raise the version (LEVEL: major, minor, patch, or X.Y.Z) and update Cargo.lock to match.")]
+[group("release")]
+bump level:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    old=$({{ just_executable() }} version)
+    IFS=. read -r major minor patch <<< "${old%%[-+]*}"
+    case "{{ level }}" in
+        major) new="$((major + 1)).0.0" ;;
+        minor) new="$major.$((minor + 1)).0" ;;
+        patch) new="$major.$minor.$((patch + 1))" ;;
+        *) new="{{ level }}" ;;
+    esac
+    if [ "$new" = "$old" ] || [ "$(printf '%s\n' "$old" "$new" | sort -V | tail -n 1)" != "$new" ]; then
+        echo "$new is not newer than $old" >&2
+        exit 1
+    fi
+    sed -i "/^\[workspace\.package\]/,/^\[/s/^version *= *\"[^\"]*\"/version = \"$new\"/" Cargo.toml
+    cargo update --workspace
+    echo "$old -> $new"
+
+[doc("Check the version is newer than on REF, as pull requests into main must be.")]
+[group("release")]
+version-check ref="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    old=$({{ just_executable() }} version {{ ref }})
+    new=$({{ just_executable() }} version)
+    if [ "$new" = "$old" ] || [ "$(printf '%s\n' "$old" "$new" | sort -V | tail -n 1)" != "$new" ]; then
+        echo "version $new is not newer than $old on {{ ref }}" >&2
+        exit 1
+    fi
+    echo "version $old -> $new"
