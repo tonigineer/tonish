@@ -38,5 +38,5 @@
 | `assets/default-config.toml` | The default settings, compiled into tonish and written on its first start. |
 | `tests/desktop/run.py` | The desktop scenarios. |
 | `book/` | This book. |
-| `.github/workflows/` | CI for pull requests, and releases. |
+| `.github/workflows/` | CI for pull requests, releases, and the book's site. |
 | `.cargo/config.toml` | Builds for the CPU you build on, which suits benchmarks. Releases override it. |

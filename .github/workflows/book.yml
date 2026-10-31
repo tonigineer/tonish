@@ -1,0 +1,64 @@
+# On every push to main rather than with each release, so that a fix to the
+# book, which may come from a fix/* branch without a release, goes online at
+# once. The book describes main, which is what the next release ships.
+name: Book
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Each push publishes all of the book, so a newer push makes an older run's
+# result pointless; but a deployment cut off halfway would leave the site
+# broken until the next one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  book:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just and mdBook
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just,mdbook@0.5
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the docs and the book
+        run: just book
+
+      - name: Keep the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: book/build
+
+  deploy:
+    name: Publish
+    needs: book
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
