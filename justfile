@@ -1,15 +1,44 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+just := just_executable()
+
+# The workspace version, from Cargo.toml on stdin.
+read_version := "sed -n 's/^version *= *\"\\(.*\\)\"/\\1/p'"
+
 [doc("List the commands, by group.")]
 default:
-    @just --list
+    @just --list --unsorted
 
-# ── Checks ──────────────────────────────────────────────────────────────────
+# ── Develop ───────────────────────────────────────────────────────────────────
+
+[doc("Run tonish.")]
+[group("develop")]
+run *args:
+    cargo run --release -- {{ args }}
+
+[doc("Build the whole workspace.")]
+[group("develop")]
+build *args:
+    cargo build --workspace {{ args }}
 
 [doc("Format all the code with rustfmt.")]
-[group("check")]
+[group("develop")]
 fmt:
     cargo fmt --all
+
+[doc("Remove what building and testing left.")]
+[group("develop")]
+clean:
+    cargo clean
+    rm -rf tests/desktop/out
+
+# ── Check ─────────────────────────────────────────────────────────────────────
+
+[doc("Run the unit tests with nextest, then the doctests.")]
+[group("check")]
+test:
+    cargo nextest run --workspace --release --no-tests=pass
+    cargo test --workspace --release --doc
 
 [doc("What CI checks: formatting, clippy with warnings as errors, and every test.")]
 [group("check")]
@@ -17,90 +46,68 @@ check: && test
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --release -- -D warnings
 
-# ── Build ───────────────────────────────────────────────────────────
+[doc("Run the desktop scenarios: tonish on a headless sway. FILTER: part of a scenario's name. Needs sway and grim.")]
+[group("check")]
+desktop filter="":
+    cargo build --release -p tonish
+    python3 tests/desktop/run.py {{ filter }}
 
-[doc("Build the whole workspace.")]
-[group("build")]
-build args="":
-    cargo build {{ args }}
+[doc("Everything CI runs: check, then the desktop scenarios.")]
+[group("check")]
+check-all: check desktop
 
-[group("run")]
-[doc("Run tonish.")]
-run args="":
-    cargo run --release -- {{ args }}
-
-# ── Test ──────────────────────────────────────────────────────────
-
-[doc("Run the unit tests with nextest, then the doctests.")]
-[group("test")]
-test:
-    cargo nextest run --workspace --release --no-tests=pass
-    cargo test --workspace --release --doc
-
-# [doc("Run one crate's tests, only those whose name holds FILTER if given.")]
-# [group("test")]
-# unit crate filter="":
-#     cargo nextest run --release -p {{ crate }} --no-tests=pass {{ filter }}
-
-# [doc("Remove what building and testing left.")]
-# [group("release")]
-# clean:
-#     cargo clean
-
-# ── Bench ─────────────────────────────────────────────────────────
+# ── Bench ─────────────────────────────────────────────────────────────────────
 
 [doc("Benchmark the CPU rasteriser, only the cases whose name holds FILTER if given.")]
 [group("bench")]
 bench filter="":
-    cargo bench -p engine --bench draw -- {{ filter }}
+    cargo bench -p renderer --bench draw -- {{ filter }}
 
 [doc("Benchmark and keep the results as baseline NAME, to measure a change against.")]
 [group("bench")]
 bench-save name="before":
-    cargo bench -p engine --bench draw -- --save-baseline {{ name }}
+    cargo bench -p renderer --bench draw -- --save-baseline {{ name }}
 
 [doc("Benchmark and compare with baseline NAME, saved earlier with bench-save.")]
 [group("bench")]
 bench-compare name="before":
-    cargo bench -p engine --bench draw -- --baseline {{ name }}
+    cargo bench -p renderer --bench draw -- --baseline {{ name }}
 
-# ── Release ───────────────────────────────────────────────────────
+# ── Release ───────────────────────────────────────────────────────────────────
 
 [doc("Print the workspace version, or the one committed at REF if given.")]
 [group("release")]
 version ref="":
-    @{{ if ref == "" { "cat Cargo.toml" } else { "git show " + ref + ":Cargo.toml" } }} | sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p'
+    @{{ if ref == "" { "cat Cargo.toml" } else { "git show " + ref + ":Cargo.toml" } }} | {{ read_version }}
 
 [doc("Raise the version (LEVEL: major, minor, patch, or X.Y.Z) and update Cargo.lock to match.")]
 [group("release")]
+[no-exit-message]
+[script("bash", "-euo", "pipefail")]
 bump level:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    old=$({{ just_executable() }} version)
-    IFS=. read -r major minor patch <<< "${old%%[-+]*}"
-    case "{{ level }}" in
-        major) new="$((major + 1)).0.0" ;;
-        minor) new="$major.$((minor + 1)).0" ;;
-        patch) new="$major.$minor.$((patch + 1))" ;;
-        *) new="{{ level }}" ;;
+    old=$({{ just }} version)
+    IFS=. read -r x y z <<< "${old%%[-+]*}"
+    case {{ level }} in
+        major) new=$((x + 1)).0.0 ;;
+        minor) new=$x.$((y + 1)).0 ;;
+        patch) new=$x.$y.$((z + 1)) ;;
+        *) new={{ level }} ;;
     esac
-    if [ "$new" = "$old" ] || [ "$(printf '%s\n' "$old" "$new" | sort -V | tail -n 1)" != "$new" ]; then
-        echo "$new is not newer than $old" >&2
-        exit 1
-    fi
-    sed -i "/^\[workspace\.package\]/,/^\[/s/^version *= *\"[^\"]*\"/version = \"$new\"/" Cargo.toml
-    cargo update --workspace
-    echo "$old -> $new"
+    {{ just }} _newer "$old" "$new"
+    sed -i "s/^version *= *\".*\"/version = \"$new\"/" Cargo.toml
+    cargo update --workspace --quiet
 
 [doc("Check the version is newer than on REF, as pull requests into main must be.")]
 [group("release")]
+[no-exit-message]
 version-check ref="origin/main":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    old=$({{ just_executable() }} version {{ ref }})
-    new=$({{ just_executable() }} version)
-    if [ "$new" = "$old" ] || [ "$(printf '%s\n' "$old" "$new" | sort -V | tail -n 1)" != "$new" ]; then
-        echo "version $new is not newer than $old on {{ ref }}" >&2
-        exit 1
-    fi
-    echo "version $old -> $new"
+    @{{ just }} _newer "$({{ just }} version {{ ref }})" "$({{ just }} version)"
+
+# Fails unless NEW is a later version than OLD. sort -V orders plain X.Y.Z
+# correctly, but would put a pre-release such as 1.0.0-rc.1 after 1.0.0.
+[private]
+[no-exit-message]
+_newer old new:
+    @[ "{{ old }}" != "{{ new }}" ] && [ "$(printf '%s\n' {{ old }} {{ new }} | sort -V | tail -n 1)" = "{{ new }}" ] \
+        || { echo "{{ new }} is not newer than {{ old }}" >&2; exit 1; }
+    @echo "{{ old }} -> {{ new }}"

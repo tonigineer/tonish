@@ -26,5 +26,4 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
-    // code.exit_process()  <- unstable feature, use when available
 }

@@ -1,0 +1,43 @@
+# Every pull request and every push to main: formatting, clippy and the
+# tests with nextest; then the desktop scenarios
+# (tonish on a headless sway).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,just
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libwayland-dev pkg-config
+      - run: just check
+
+  desktop:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed git rustup gcc pkgconf wayland sway grim python just > /dev/null
+      # sway carries cap_sys_nice; a container may not run a binary with a capability.
+      - run: setcap -r /usr/bin/sway || true
+      - run: rustup default stable
+      - uses: actions/checkout@v4
+      - run: just desktop
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-out
+          path: tests/desktop/out
