@@ -50,8 +50,14 @@ jobs:
             exit 1
           }
 
+  # Every job waits for the version check, so that a forgotten `just bump`
+  # stops a pull request before it spends minutes on anything else. The
+  # condition lets the job run when the check passed or was skipped, as for
+  # fix/* branches: without it, a skipped need would skip this job too.
   lint:
     name: Lint
+    needs: version
+    if: ${{ !cancelled() && needs.version.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -80,6 +86,8 @@ jobs:
 
   build:
     name: Build
+    needs: version
+    if: ${{ !cancelled() && needs.version.result != 'failure' }}
     uses: ./.github/workflows/build.yml
 
   # Runs the packaged binary, so that the desktop tests check what a merge would
@@ -87,6 +95,9 @@ jobs:
   desktop:
     name: Desktop
     needs: build
+    # Explicit, because a skipped version check further up would otherwise
+    # skip this job as well, even after a successful build.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest

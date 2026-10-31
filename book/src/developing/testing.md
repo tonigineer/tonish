@@ -53,7 +53,7 @@ pytest and ruff come through [uv](https://docs.astral.sh/uv/), at the versions i
 
 ## Pull requests
 
-A pull request into `main` runs these jobs:
+A pull request into `main` runs these jobs. The others wait for "Version raised" and don't run if it fails, so that a forgotten `just bump` costs seconds instead of a full run:
 
 | Job | What it checks |
 |---|---|
