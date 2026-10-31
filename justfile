@@ -2,8 +2,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 just := just_executable()
 
-# The workspace version, from Cargo.toml on stdin.
-read_version := "sed -n 's/^version *= *\"\\(.*\\)\"/\\1/p'"
+# The workspace version, from Cargo.toml on stdin; fails if there is none.
+read_version := "sed -n 's/^version *= *\"\\(.*\\)\"/\\1/p' | grep ."
 
 [doc("List the commands, by group.")]
 default:
@@ -34,17 +34,21 @@ clean:
 
 # ── Check ─────────────────────────────────────────────────────────────────────
 
+[doc("Check the formatting, and run clippy with warnings as errors.")]
+[group("check")]
+lint:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets --release -- -D warnings
+
 [doc("Run the unit tests with nextest, then the doctests.")]
 [group("check")]
 test:
     cargo nextest run --workspace --release --no-tests=pass
     cargo test --workspace --release --doc
 
-[doc("What CI checks: formatting, clippy with warnings as errors, and every test.")]
+[doc("Lint, then test: what a pull request checks, short of the desktop scenarios.")]
 [group("check")]
-check: && test
-    cargo fmt --all --check
-    cargo clippy --workspace --all-targets --release -- -D warnings
+check: lint test
 
 [doc("Run the desktop scenarios: tonish on a headless sway. FILTER: part of a scenario's name. Needs sway and grim.")]
 [group("check")]
@@ -52,7 +56,7 @@ desktop filter="":
     cargo build --release -p tonish
     python3 tests/desktop/run.py {{ filter }}
 
-[doc("Everything CI runs: check, then the desktop scenarios.")]
+[doc("Everything a pull request checks: check, then the desktop scenarios.")]
 [group("check")]
 check-all: check desktop
 
@@ -101,7 +105,7 @@ bump level:
 [group("release")]
 [no-exit-message]
 version-check ref="origin/main":
-    @{{ just }} _newer "$({{ just }} version {{ ref }})" "$({{ just }} version)"
+    @old=$({{ just }} version {{ ref }}) && new=$({{ just }} version) && {{ just }} _newer "$old" "$new"
 
 # Fails unless NEW is a later version than OLD. sort -V orders plain X.Y.Z
 # correctly, but would put a pre-release such as 1.0.0-rc.1 after 1.0.0.

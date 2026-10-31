@@ -1,0 +1,69 @@
+# Tests the workspace and packs tonish exactly as a release ships it. Pull
+# requests and releases both call this, so a pull request that passes builds
+# the very package its merge would release. The package is kept as the
+# workflow artifact "package" for the jobs after it.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # .cargo/config.toml builds for the local CPU, which suits benchmarks but
+  # not a binary meant to run on other machines. x86-64-v2 runs on
+  # practically every x86-64 CPU still in use.
+  RUSTFLAGS: -C target-cpu=x86-64-v2
+
+jobs:
+  build:
+    name: Test and package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just and nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
+
+      # Keyed on Cargo.lock, the toolchain and RUSTFLAGS. Runs on main save
+      # it for every pull request; a pull request saves its own for its next
+      # push.
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      # Raising the version without `cargo update --workspace` (`just bump`
+      # does both) leaves Cargo.lock behind, and every command below would
+      # quietly rewrite it.
+      - name: Check Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Test
+        run: just test
+
+      - name: Build
+        run: cargo build --release --locked -p tonish
+
+      - name: Package
+        run: |
+          name="tonish-v$(just version)-x86_64-linux"
+          mkdir -p "dist/$name"
+          cp target/release/tonish "dist/$name/"
+          cd dist
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: Keep the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: dist/*.tar.gz*
+          retention-days: 7
+          if-no-files-found: error
