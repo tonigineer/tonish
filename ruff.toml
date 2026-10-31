@@ -1,0 +1,8 @@
+# Python 3.12 is the oldest that runs the desktop scenarios, on CI's Ubuntu.
+target-version = "py312"
+
+[lint]
+# On top of ruff's defaults, which leave line length to the formatter:
+# likely bugs (bugbear), import order (isort) and outdated syntax
+# (pyupgrade).
+extend-select = ["B", "I", "UP"]

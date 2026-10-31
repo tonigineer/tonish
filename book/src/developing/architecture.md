@@ -19,7 +19,8 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 | Method | The engine asks |
 |---|---|
 | `surfaces` | Which surfaces does this monitor get? Asked when a monitor appears, and for every monitor again after `changed` returns `true`. |
-| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine rasterises it into the surface's buffer. |
+| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine rasterises it into the surface's buffer. Asked when the compositor gives the surface a new size, and when `to_redraw` names it. |
+| `to_redraw` | What should I draw again? Asked after every batch of events, so that anything the app handles can lead to a redraw. A surface named several times in one batch is drawn once. |
 | `watched` | Which files should I watch? Asked once at start. |
 | `changed` | This file changed: does that change your surfaces? `true` makes the engine destroy every surface and ask `surfaces` again. |
 | `socket` | Where should I listen for messages? Asked first, because the socket also keeps a second instance from starting. |

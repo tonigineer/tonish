@@ -40,6 +40,7 @@ These all end tonish cleanly: it removes its panels, gives the room back to wind
 | Message | What it does |
 |---|---|
 | `quit` | Closes all panels and ends tonish |
+| `redraw` | Draws every panel again. With `TONISH_LOG=engine=debug`, the log then shows how long each draw took. |
 
 With no tonish running, `tonish msg quit` says that nobody answers and exits with 1. An unknown message is a mistake on the command line: tonish lists the known ones and exits with 2.
 

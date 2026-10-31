@@ -32,7 +32,7 @@ use wayland_client::{
     protocol::{wl_output, wl_shm, wl_surface},
 };
 
-use crate::app::{App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
+use crate::app::{App, Layer, Output, OutputId, Paint, Redraw, SurfaceId, SurfaceSpec};
 use crate::socket::{self, Socket};
 
 /// Returns `Ok` after a quit message, SIGINT (Ctrl+C) or SIGTERM, once the
@@ -142,6 +142,7 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
         event_loop
             .dispatch(None, &mut engine)
             .map_err(|e| e.to_string())?;
+        engine.redraw();
     }
     // Destroys the surfaces and sends that, so the panels are gone before a
     // client waiting for the end hears about it.
@@ -216,10 +217,10 @@ impl Engine {
             return PostAction::Continue;
         };
         let reply = self.app.message(&text);
-        debug!(message = %text, reply = %reply.text, "message");
+        debug!(msg = %text, reply = %reply.text, "message");
         socket::reply(stream, &reply.text);
         if reply.quit {
-            info!(message = %text, "shutting down");
+            info!(msg = %text, "shutting down");
             self.quit = true;
             PostAction::Disable
         } else {
@@ -346,6 +347,21 @@ impl Engine {
         }
     }
 
+    fn redraw(&mut self) {
+        let redraw = self.app.to_redraw();
+        if redraw == Redraw::Nothing {
+            return;
+        }
+        let outs: Vec<_> = self
+            .outs
+            .iter()
+            .map(|o| (o.info.id, o.surfaces.len()))
+            .collect();
+        for (oi, si) in targets(&outs, redraw) {
+            self.draw(oi, si);
+        }
+    }
+
     fn find_layer(&self, layer: &LayerSurface) -> Option<(usize, usize)> {
         self.outs.iter().enumerate().find_map(|(oi, o)| {
             let si = o.surfaces.iter().position(|s| &s.layer == layer)?;
@@ -395,6 +411,31 @@ impl Engine {
             "drew"
         );
     }
+}
+
+/// Indices into the outputs and their surfaces, each once, so that a surface
+/// asked for twice in one batch is drawn once. Outputs and surfaces that are
+/// gone are left out, because the event that removed them may have come in
+/// the same batch, after the app asked.
+fn targets(outs: &[(OutputId, usize)], redraw: Redraw) -> Vec<(usize, usize)> {
+    let mut targets: Vec<_> = match redraw {
+        Redraw::Nothing => Vec::new(),
+        Redraw::Everything => outs
+            .iter()
+            .enumerate()
+            .flat_map(|(oi, &(_, n))| (0..n).map(move |si| (oi, si)))
+            .collect(),
+        Redraw::Surfaces(surfaces) => surfaces
+            .into_iter()
+            .filter_map(|(id, SurfaceId(si))| {
+                let oi = outs.iter().position(|&(o, _)| o == id)?;
+                (si < outs[oi].1).then_some((oi, si))
+            })
+            .collect(),
+    };
+    targets.sort_unstable();
+    targets.dedup();
+    targets
 }
 
 fn name(out: &Output) -> &str {
@@ -540,6 +581,35 @@ mod tests {
             Vec::new()
         }
         fn draw(&mut self, _: OutputId, _: SurfaceId, _: &mut Paint) {}
+    }
+
+    #[test]
+    fn everything_is_every_surface_of_every_output() {
+        let outs = [(OutputId(7), 2), (OutputId(9), 1)];
+        assert_eq!(targets(&outs, Redraw::Everything), [(0, 0), (0, 1), (1, 0)]);
+        assert_eq!(targets(&outs, Redraw::Nothing), []);
+    }
+
+    #[test]
+    fn a_surface_asked_for_twice_is_drawn_once() {
+        let outs = [(OutputId(7), 2), (OutputId(9), 1)];
+        let twice = Redraw::Surfaces(vec![
+            (OutputId(9), SurfaceId(0)),
+            (OutputId(7), SurfaceId(1)),
+            (OutputId(9), SurfaceId(0)),
+        ]);
+        assert_eq!(targets(&outs, twice), [(0, 1), (1, 0)]);
+    }
+
+    #[test]
+    fn surfaces_that_are_gone_are_left_out() {
+        let outs = [(OutputId(7), 1)];
+        let gone = Redraw::Surfaces(vec![
+            (OutputId(8), SurfaceId(0)),
+            (OutputId(7), SurfaceId(1)),
+            (OutputId(7), SurfaceId(0)),
+        ]);
+        assert_eq!(targets(&outs, gone), [(0, 0)]);
     }
 
     #[test]

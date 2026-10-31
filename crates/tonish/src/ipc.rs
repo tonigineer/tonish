@@ -17,6 +17,8 @@ use clap::ValueEnum;
 pub enum Message {
     /// Close all panels and end tonish
     Quit,
+    /// Draw every panel again
+    Redraw,
 }
 
 impl Message {

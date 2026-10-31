@@ -94,8 +94,13 @@ class Desktop:
         # Open for as long as tonish runs, which outlives any `with` here;
         # close() closes it.
         self.log = open(self.dir / "tonish.log", "w")  # noqa: SIM115
+        # The engine at debug, so that scenarios can count draws and a
+        # failure shows them.
         self.tonish = subprocess.Popen(
-            [str(TONISH)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT
+            [str(TONISH)],
+            env=dict(self.env, TONISH_LOG="engine=debug,info"),
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
         )
 
     def workspaces(self):
@@ -328,6 +333,27 @@ def a_second_tonish_does_not_start(d):
         f"second tonish: {second.returncode} {second.stderr.strip()}",
     )
     check(d.tonish.poll() is None, "the first tonish ended")
+
+
+def draws(d):
+    return d.logged().count("drew monitor=")
+
+
+@scenario
+def msg_redraw_draws_every_panel_once_more(d):
+    panels_up(d)
+    check(
+        wait_for(lambda: draws(d) >= 2, 3.0) is not None, "the panels were never drawn"
+    )
+    before = draws(d)
+    sent = run_tonish(d, "msg", "redraw")
+    check(sent.returncode == 0, f"tonish msg redraw: {sent.stderr.strip()}")
+    check(
+        wait_for(lambda: draws(d) == before + 2, 3.0) is not None,
+        f"{draws(d) - before} draws after msg redraw, not one per monitor",
+    )
+    time.sleep(0.2)
+    check(draws(d) == before + 2, f"{draws(d) - before} draws, not one per monitor")
 
 
 @local

@@ -64,4 +64,4 @@ Measured on an Intel Core i9-13900K, with the renderer built for that CPU, as `.
 | `fullscreen/1920x1080@2` | 1.4 ms |
 | `overlay/1920x1080@2` | 5.1 ms |
 
-With `TONISH_LOG=engine=debug`, tonish logs each draw with its size and the time it took, in your own session.
+With `TONISH_LOG=engine=debug`, tonish logs each draw with its size and the time it took, in your own session. `tonish msg redraw` draws every panel again, so you can time a draw whenever you like.
