@@ -6,6 +6,8 @@ edition.workspace = true
 
 [dependencies]
 renderer.workspace = true
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
 
 [lints]
 workspace = true

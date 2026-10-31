@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+png.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "draw"
+harness = false
 
 [lints]
 workspace = true

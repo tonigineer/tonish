@@ -1,0 +1,126 @@
+# Everything a pull request into main has to pass: the version raised, lint,
+# the same test and build as a release, and the general desktop scenarios
+# run on the package that build made.
+#
+# A failing job only blocks merging once it is a required status check in a
+# ruleset or branch protection rule for main. A job skipped by its
+# condition, as "Version raised" is for fix/* branches, counts as passed.
+name: Pull request
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request makes the run for the push before it useless.
+concurrency:
+  group: pull-request-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Each merge into main is a release, so its version has to be new. Branches
+  # named fix/* are exempt: they merge without a release and go out with the
+  # next version that is raised.
+  version:
+    name: Version raised
+    if: ${{ !startsWith(github.head_ref, 'fix/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          # The base branch has to be there to compare against.
+          fetch-depth: 0
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Check the version is newer than on ${{ github.base_ref }}
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          just version-check "origin/$BASE" || {
+            echo "::error file=Cargo.toml::raise the version with just bump, or name the branch fix/..."
+            exit 1
+          }
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Lint
+        run: just lint
+
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+
+  # Only the general scenarios run here (run.py sees CI set); how panels look
+  # is checked locally. They run the packaged binary, so nothing is compiled.
+  desktop:
+    name: Desktop
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      # grim's screenshots of a failure go through shared memory; the 64 MB
+      # a container gets by default is too little for two 4K monitors.
+      options: --shm-size=1g
+    steps:
+      - name: Install sway, grim and Python
+        run: pacman -Syu --noconfirm --needed sway grim python > /dev/null
+
+      # sway carries cap_sys_nice; a container may not run a binary with a
+      # capability.
+      - name: Let sway run in a container
+        run: setcap -r /usr/bin/sway || true
+
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Fetch the package
+        uses: actions/download-artifact@v8
+        with:
+          name: package
+          path: dist
+
+      - name: Unpack
+        run: |
+          (cd dist && sha256sum --check ./*.sha256)
+          mkdir -p target/release
+          tar xzf dist/tonish-*.tar.gz --strip-components=1 -C target/release
+
+      - name: Run the desktop scenarios
+        run: python3 tests/desktop/run.py
+
+      - name: Keep the screenshots of failures
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-screenshots
+          path: tests/desktop/out
+          retention-days: 7
+          if-no-files-found: ignore
