@@ -3,6 +3,4 @@
 //! The renderer is re-exported so the shell needs this one dependency and
 //! always names the same renderer types the engine draws with.
 
-pub mod cpu;
-
 pub use renderer;

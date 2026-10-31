@@ -47,6 +47,23 @@ test:
 # clean:
 #     cargo clean
 
+# ── Bench ─────────────────────────────────────────────────────────
+
+[doc("Benchmark the CPU rasteriser, only the cases whose name holds FILTER if given.")]
+[group("bench")]
+bench filter="":
+    cargo bench -p engine --bench draw -- {{ filter }}
+
+[doc("Benchmark and keep the results as baseline NAME, to measure a change against.")]
+[group("bench")]
+bench-save name="before":
+    cargo bench -p engine --bench draw -- --save-baseline {{ name }}
+
+[doc("Benchmark and compare with baseline NAME, saved earlier with bench-save.")]
+[group("bench")]
+bench-compare name="before":
+    cargo bench -p engine --bench draw -- --baseline {{ name }}
+
 # ── Release ───────────────────────────────────────────────────────
 
 [doc("Print the workspace version, or the one committed at REF if given.")]

@@ -6,22 +6,32 @@
 //! GPU fragment shader evaluates, so every backend can rasterise the same
 //! [`Scene`] the same way.
 
-/// A colour with 8-bit channels and a fractional opacity.
+/// A colour with 8-bit channels, opacity included.
 ///
-/// The channels match the precision of the buffers they end up in. Opacity
-/// is an `f32` because it is animated and multiplied with antialiasing
-/// coverage, both of which are fractional; it is expected in `0.0..=1.0`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Every channel matches the precision of the buffers it ends up in, so
+/// storing more would gain nothing visible. Fractional work such as
+/// antialiasing coverage happens per pixel in the backends, and animations
+/// derive a colour from their own `f32` progress every frame rather than
+/// stepping a stored one, so rounding never accumulates.
+///
+/// Constructors take the opacity as a fraction in `0.0..=1.0`, which is how
+/// designs and animations express it; values outside are clamped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,
     pub b: u8,
-    pub a: f32,
+    pub a: u8,
+}
+
+/// Converts a fractional opacity to a byte, rounding to the nearest step.
+fn opacity(a: f32) -> u8 {
+    (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 impl Rgba {
     pub fn from_rgb(r: u8, g: u8, b: u8, a: f32) -> Self {
-        Self { r, g, b, a }
+        Self { r, g, b, a: opacity(a) }
     }
 
     /// Takes the opacity separately so that a `0xRRGGBB` literal copied from
@@ -36,7 +46,7 @@ impl Rgba {
     /// depend on the opacity the colour was defined with. To fade a colour
     /// that is already translucent, scale `a` directly.
     pub fn alpha(mut self, a: f32) -> Self {
-        self.a = a;
+        self.a = opacity(a);
         self
     }
 }
@@ -192,7 +202,7 @@ impl Scene {
     /// per-pixel work on them and animations can fade a shape to zero, or
     /// past it, without special cases.
     pub fn push(&mut self, shape: impl Shape + 'static) {
-        if shape.color().a <= 0.0 {
+        if shape.color().a == 0 {
             return;
         }
         self.shapes.push(Box::new(shape));
@@ -309,6 +319,22 @@ mod tests {
     fn alpha_replaces_the_opacity_and_keeps_the_colour() {
         let c = Rgba::from_hex(0xff8000, 0.2).alpha(0.5);
         assert_eq!(c, Rgba::from_rgb(255, 128, 0, 0.5));
+    }
+
+    #[test]
+    fn opacity_rounds_to_the_nearest_byte() {
+        assert_eq!(white().a, 255);
+        assert_eq!(transparent().a, 0);
+        // 127.5 rounds up, so half opacity sits a hair above half.
+        assert_eq!(white().alpha(0.5).a, 128);
+    }
+
+    #[test]
+    fn opacity_outside_zero_to_one_is_clamped() {
+        // Animations with easing overshoot both ends.
+        assert_eq!(white().alpha(1.25).a, 255);
+        assert_eq!(white().alpha(-0.25).a, 0);
+        assert_eq!(Rgba::from_rgb(1, 2, 3, 2.0), Rgba::from_rgb(1, 2, 3, 1.0));
     }
 
     #[test]

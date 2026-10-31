@@ -7,7 +7,7 @@
 //! tests below pin its behaviour so that optimisations, such as filling the
 //! solid interior of opaque shapes directly, can be checked against them.
 
-use crate::renderer::scene::{Point, Shape};
+use crate::scene::{Point, Shape};
 
 /// Rasterises `shapes` into `px`, back to front.
 ///
@@ -48,7 +48,9 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
 
         // Once per shape rather than once per pixel.
         let c = s.color();
-        let [red, green, blue] = [c.r, c.g, c.b].map(|v| v as f32 / 255.0);
+        // Channels stay in 0..=255 so blending needs no rescaling per pixel.
+        let [red, green, blue] = [c.r, c.g, c.b].map(f32::from);
+        let opacity = c.a as f32 / 255.0;
 
         for y in y0..y1 {
             // Pixels are sampled at their centres, so edges on whole logical
@@ -58,7 +60,7 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
             let row = &mut px[y * w + x0..y * w + x1];
             for (x, bytes) in (x0..).zip(row) {
                 let p = Point::new((x as f32 + 0.5) / scale, py);
-                let alpha = cover(s.distance(p)) * c.a;
+                let alpha = cover(s.distance(p)) * opacity;
                 if alpha <= 0.0 {
                     continue;
                 }
@@ -67,8 +69,7 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
                 // division per pixel. What lies underneath shows through as
                 // far as this shape leaves the pixel uncovered.
                 let keep = 1.0 - alpha;
-                let blend =
-                    |new: f32, curr: u8| (new * alpha * 255.0 + curr as f32 * keep + 0.5) as u8;
+                let blend = |new: f32, curr: u8| (new * alpha + curr as f32 * keep + 0.5) as u8;
                 bytes[0] = blend(blue, bytes[0]);
                 bytes[1] = blend(green, bytes[1]);
                 bytes[2] = blend(red, bytes[2]);
@@ -81,7 +82,7 @@ pub fn draw(px: &mut [u8], w: usize, h: usize, scale: f32, shapes: &[Box<dyn Sha
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::scene::{Circle, Rect, Rgba, Scene};
+    use crate::scene::{Circle, Rect, Rgba, Scene};
 
     /// Draws into a fresh buffer for every query, so that no test can depend
     /// on what another left behind.
@@ -143,7 +144,9 @@ mod tests {
         let mut s = Scene::new();
         s.push(rect(0.0, 0.0, 10.0, 10.0, Rgba::from_hex(0x0000ff, 1.0)));
         s.push(rect(0.0, 0.0, 10.0, 10.0, Rgba::from_hex(0xff0000, 0.5)));
-        assert_eq!(at(&s, (10, 10), 1.0, (5, 5)), [128, 0, 128, 255]);
+        // Half opacity is stored as 128/255, a hair over half, so slightly
+        // less of the blue shows through.
+        assert_eq!(at(&s, (10, 10), 1.0, (5, 5)), [127, 0, 128, 255]);
     }
 
     #[test]
