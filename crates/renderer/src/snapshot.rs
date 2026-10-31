@@ -1,9 +1,24 @@
+//! Pictures of scenes, for checking what the renderer draws by eye and
+//! against reference images.
+//!
+//! A [`Picture`] is drawn by the CPU rasteriser, so it needs no display and
+//! no GPU, and it reads and writes PNG, so a reference can be committed and
+//! opened in any image viewer. [`Picture::diff`] compares two pictures with
+//! a tolerance, because a later backend, or a change of rounding, may move
+//! a channel by a step without anything looking different.
+
 use png;
 use std::path::Path;
 
 use crate::scene::{Rgba, Shape};
-const RGBA_BYTES: usize = 4;
 
+/// `w`×`h` physical pixels of premultiplied RGBA, row by row.
+///
+/// RGBA rather than the rasteriser's BGRA, because that is what PNG stores.
+/// Premultiplied, because that is what the rasteriser produces and what the
+/// compositor shows. PNG itself means straight alpha, so a viewer shows
+/// translucent pixels too dark; [`Picture::over`] an opaque ground first
+/// gives a picture that looks in a viewer as it does on screen.
 pub struct Picture {
     pub w: u32,
     pub h: u32,
@@ -11,17 +26,27 @@ pub struct Picture {
 }
 
 impl Picture {
-    fn paint(size: (f32, f32), scale: f32, shapes: &[Box<dyn Shape>]) -> Self {
+    /// Draws `shapes` on a transparent picture of `size` logical pixels at
+    /// `scale`, as a surface of that size on such an output would show them.
+    /// The physical size is rounded down, as the compositor does.
+    pub fn paint(size: (f32, f32), scale: f32, shapes: &[Box<dyn Shape>]) -> Self {
         let (w, h) = ((size.0 * scale) as u32, (size.1 * scale) as u32);
-        let mut px = vec![0u8; w as usize * h as usize * RGBA_BYTES];
+        let mut px = vec![0u8; w as usize * h as usize * 4];
         crate::cpu::draw(&mut px, w as usize, h as usize, scale, shapes);
+        // BGRA to RGBA: only blue and red trade places.
         for p in px.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
         }
         Self { w, h, px }
     }
 
-    fn over(mut self, ground: Rgba) -> Self {
+    /// Puts the picture in front of a solid `ground`, the way a surface
+    /// shows over whatever lies behind it.
+    ///
+    /// Over an opaque ground every pixel comes out opaque, where
+    /// premultiplied and straight alpha agree, so the saved PNG looks right
+    /// in any viewer. A translucent ground keeps the result translucent.
+    pub fn over(mut self, ground: Rgba) -> Self {
         // Premultiplied once, not once per pixel. Products of two bytes
         // reach 255 * 255, so the arithmetic is widened to `u16`; storage
         // stays `u8`.
@@ -29,6 +54,7 @@ impl Picture {
         let g = [ground.r, ground.g, ground.b, 255].map(|c| ((c as u16 * a + 127) / 255) as u8);
 
         for b in self.px.as_chunks_mut::<4>().0 {
+            // How much of the ground the pixel leaves uncovered.
             let inv = 255 - b[3] as u16;
             for i in 0..4 {
                 b[i] = (b[i] as u16 + (g[i] as u16 * inv + 127) / 255) as u8;
@@ -37,7 +63,9 @@ impl Picture {
         self
     }
 
-    fn save(&self, path: &Path) -> std::io::Result<()> {
+    /// Writes the picture as an 8-bit RGBA PNG, creating missing directories
+    /// so that a new reference image can be saved where it belongs.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -46,11 +74,17 @@ impl Picture {
         let mut encoder = png::Encoder::new(file, self.w, self.h);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        // PNG errors become I/O errors, so callers handle a single kind.
         let mut w = encoder.write_header().map_err(std::io::Error::other)?;
         w.write_image_data(&self.px).map_err(std::io::Error::other)
     }
 
-    fn load(path: &Path) -> std::io::Result<Self> {
+    /// Reads a PNG written by [`Picture::save`].
+    ///
+    /// Anything other than 8-bit RGBA is refused rather than converted: a
+    /// reference image in another format has been re-saved by some other
+    /// tool, and comparing against a conversion of it would hide that.
+    pub fn load(path: &Path) -> std::io::Result<Self> {
         let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path)?));
         let mut reader = decoder.read_info().map_err(std::io::Error::other)?;
         let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
@@ -69,7 +103,14 @@ impl Picture {
         })
     }
 
-    fn diff(&self, other: &Picture, tolerance: u8) -> Option<(u8, usize)> {
+    /// How far two pictures are apart: the largest difference of any
+    /// channel, and how many pixels differ by more than `tolerance` in some
+    /// channel. `None` if their sizes differ, since then no pixel has a
+    /// counterpart.
+    ///
+    /// Both numbers are returned, rather than a verdict, so that a failing
+    /// check can say whether a few pixels are badly off or many slightly.
+    pub fn diff(&self, other: &Picture, tolerance: u8) -> Option<(u8, usize)> {
         if self.w != other.w || self.h != other.h {
             return None;
         }
@@ -84,6 +125,7 @@ impl Picture {
             .iter()
             .zip(other.px.as_chunks::<4>().0)
         {
+            // A pixel is as far off as its worst channel.
             let d = a
                 .iter()
                 .zip(b)
@@ -113,9 +155,14 @@ mod tests {
         }
     }
 
-    /// A 1×1 picture holding the given premultiplied RGBA pixel.
+    /// A 1×1 picture holding one premultiplied RGBA pixel, so that tests of
+    /// `over` can state their input exactly instead of drawing it.
     fn pixel(px: [u8; 4]) -> Picture {
-        Picture { w: 1, h: 1, px: px.to_vec() }
+        Picture {
+            w: 1,
+            h: 1,
+            px: px.to_vec(),
+        }
     }
 
     #[test]
@@ -137,6 +184,7 @@ mod tests {
 
     #[test]
     fn pictures_apart_say_how_far() {
+        // A white rect over a single pixel against an empty picture.
         let mut s = Scene::new();
         let a = Picture::paint((4.0, 4.0), 1.0, &s.shapes);
         s.push(rect(0.0, 0.0, 1.0, 1.0, Rgba::from_hex(0xffffff, 1.0)));
@@ -150,7 +198,7 @@ mod tests {
     fn paint_sizes_the_picture_in_physical_pixels() {
         let p = Picture::paint((2.0, 3.0), 2.0, &[]);
         assert_eq!((p.w, p.h), (4, 6));
-        assert_eq!(p.px.len(), 4 * 6 * RGBA_BYTES);
+        assert_eq!(p.px.len(), 4 * 6 * 4);
     }
 
     #[test]
@@ -159,7 +207,12 @@ mod tests {
         let mut s = Scene::new();
         s.push(rect(0.0, 0.0, 2.0, 2.0, Rgba::from_hex(0xff8000, 1.0)));
         let p = Picture::paint((2.0, 2.0), 1.0, &s.shapes);
-        assert!(p.px.as_chunks::<4>().0.iter().all(|&c| c == [255, 128, 0, 255]));
+        assert!(
+            p.px.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|&c| c == [255, 128, 0, 255])
+        );
     }
 
     #[test]

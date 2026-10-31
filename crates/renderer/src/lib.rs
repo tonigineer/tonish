@@ -10,4 +10,4 @@ pub mod cpu;
 pub mod scene;
 pub mod snapshot;
 
-pub use scene::{Circle, Point, Rect, Rgba, Scene, Shape, Side};
+pub use scene::{Circle, Orientation, Point, Rect, Rgba, Scene, Shape};

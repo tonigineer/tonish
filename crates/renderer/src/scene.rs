@@ -31,7 +31,12 @@ fn opacity(a: f32) -> u8 {
 
 impl Rgba {
     pub fn from_rgb(r: u8, g: u8, b: u8, a: f32) -> Self {
-        Self { r, g, b, a: opacity(a) }
+        Self {
+            r,
+            g,
+            b,
+            a: opacity(a),
+        }
     }
 
     /// Takes the opacity separately so that a `0xRRGGBB` literal copied from
@@ -53,7 +58,7 @@ impl Rgba {
 
 /// An edge of an output that a bar can be attached to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum Side {
+pub enum Orientation {
     #[default]
     Left,
     Right,
@@ -61,11 +66,11 @@ pub enum Side {
     Bottom,
 }
 
-impl Side {
+impl Orientation {
     /// Bars on the left and right run vertically; layout uses this to decide
     /// which axis is a bar's length and which its thickness.
     pub fn is_vertical(self) -> bool {
-        matches!(self, Side::Left | Side::Right)
+        matches!(self, Orientation::Left | Orientation::Right)
     }
 }
 
@@ -339,8 +344,8 @@ mod tests {
 
     #[test]
     fn only_left_and_right_are_vertical() {
-        assert!(Side::Left.is_vertical() && Side::Right.is_vertical());
-        assert!(!Side::Top.is_vertical() && !Side::Bottom.is_vertical());
+        assert!(Orientation::Left.is_vertical() && Orientation::Right.is_vertical());
+        assert!(!Orientation::Top.is_vertical() && !Orientation::Bottom.is_vertical());
     }
 
     #[test]
