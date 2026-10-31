@@ -1,8 +1,7 @@
-
 use std::collections::HashMap;
 
-use renderer::{Circle, Point, Rect, Scene, Shape};
 use engine::{self, App, Layer, Output, OutputId, Paint, SurfaceId, SurfaceSpec};
+use renderer::{Circle, Point, Rect, Scene, Shape};
 
 use crate::theme::Theme;
 
