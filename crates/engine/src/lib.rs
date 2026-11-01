@@ -3,6 +3,7 @@
 //! compositor.
 
 mod app;
+mod gles;
 mod socket;
 mod wayland;
 
@@ -11,4 +12,4 @@ pub use app::{App, Layer, Output, OutputId, Paint, Redraw, Reply, SurfaceId, Sur
 // the versions the engine was built against.
 pub use renderer;
 pub use smithay_client_toolkit::shell::wlr_layer::Anchor;
-pub use wayland::run;
+pub use wayland::{Gpu, run};

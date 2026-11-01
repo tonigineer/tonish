@@ -40,7 +40,8 @@ def wait_for(cond, seconds=3.0, step=0.02):
 
 
 class Desktop:
-    def __init__(self):
+    def __init__(self, *args):
+        """`args` go to tonish, such as `--disable-gpu`."""
         self.dir = Path(tempfile.mkdtemp(prefix="tonish-test-"))
         home, run = self.dir / "home", self.dir / "run"
         (home / ".config").mkdir(parents=True)
@@ -78,7 +79,7 @@ class Desktop:
         # The engine at debug, so that tests can count draws and a failure
         # shows them.
         self.tonish = subprocess.Popen(
-            [str(TONISH)],
+            [str(TONISH), *args],
             env=dict(self.env, TONISH_LOG="engine=debug,info"),
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -155,6 +156,11 @@ class Desktop:
 
     def draws(self):
         return self.logged().count("drew monitor=")
+
+    def wait_for_gpu(self):
+        """Until the GPU has taken over the panels of both monitors, which
+        it does with a draw of each."""
+        assert wait_for(lambda: self.logged().count("on=gpu") >= 2), self.logged()
 
     def shot(self, name):
         OUT.mkdir(exist_ok=True)

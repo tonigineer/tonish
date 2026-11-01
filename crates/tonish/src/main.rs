@@ -15,7 +15,8 @@ fn main() -> ExitCode {
         None => {
             logging::init();
             info!(version = %env!("CARGO_PKG_VERSION"), "starting");
-            load(args).and_then(|shell| engine::run(Box::new(shell)))
+            let gpu = args.gpu();
+            load(args).and_then(|shell| engine::run(Box::new(shell), gpu))
         }
     };
     match done {

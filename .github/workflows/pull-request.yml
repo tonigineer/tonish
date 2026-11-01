@@ -109,8 +109,10 @@ jobs:
       # a container gets by default is too little for two 4K monitors.
       options: --shm-size=1g
     steps:
-      - name: Install sway, grim, Python and uv
-        run: pacman -Syu --noconfirm --needed sway grim python uv > /dev/null
+      # Mesa by name, because its software renderer stands in for the GPU
+      # in the GPU tests, and sway only asks for some OpenGL driver.
+      - name: Install sway, grim, Mesa, Python and uv
+        run: pacman -Syu --noconfirm --needed sway grim mesa python uv > /dev/null
 
       # sway carries cap_sys_nice; a container may not run a binary with a
       # capability.

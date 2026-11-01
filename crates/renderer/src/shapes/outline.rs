@@ -1,4 +1,4 @@
-use super::Shape;
+use super::{Sdf, Shape};
 use crate::scene::{Point, Rgba};
 
 /// Centred on the edge, so that an outline drawn over its own fill hides the
@@ -48,6 +48,16 @@ impl<S: Shape> Shape for Outline<S> {
     /// pixel of the panel through `distance`.
     fn hole(&self, y: f32, depth: f32) -> Option<[f32; 2]> {
         self.shape.inside(y, self.width / 2.0 + depth)
+    }
+
+    /// The shader folds the distance once, so an outline of an outline is
+    /// left to the CPU.
+    fn sdf(&self) -> Option<Sdf> {
+        let sdf = self.shape.sdf().filter(|s| s.outline == 0.0)?;
+        Some(Sdf {
+            outline: self.width,
+            ..sdf
+        })
     }
 }
 

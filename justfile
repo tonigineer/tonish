@@ -64,7 +64,7 @@ test:
 [group("check")]
 check: lint test
 
-[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim and uv.")]
+[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim, Mesa and uv.")]
 [group("check")]
 [positional-arguments]
 desktop *args:
@@ -77,7 +77,7 @@ check-all: check desktop
 
 # ── Bench ─────────────────────────────────────────────────────────────────────
 
-[doc("Benchmark the CPU rasteriser, only the cases whose name holds FILTER if given.")]
+[doc("Benchmark drawing on the CPU and the GPU, only the cases whose name holds FILTER if given, such as cpu or gpu.")]
 [group("bench")]
 bench filter="":
     cargo bench -p renderer --bench draw -- {{ filter }}

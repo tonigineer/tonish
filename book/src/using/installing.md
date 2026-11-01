@@ -12,6 +12,10 @@ install -Dm755 tonish-v0.0.3-x86_64-linux/tonish ~/.local/bin/tonish
 
 The release binary is built for x86-64-v2, which practically every x86-64 CPU still in use supports.
 
+tonish loads these libraries when it runs, and every Wayland desktop has them:
+- `libwayland-client`, always;
+- `libEGL` with a GPU driver, and `libwayland-egl`, once tonish starts the [GPU](running.md#the-gpu), which `--disable-gpu` prevents. Without them, tonish draws everything on the CPU.
+
 The package also holds `config.toml`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
 
 ## From source

@@ -1,14 +1,16 @@
 [package]
 name = "renderer"
-description = "drawing: shapes by signed distance, on the CPU (the GPU comes later)"
+description = "drawing: shapes by signed distance, on the CPU or with OpenGL ES"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
+glow.workspace = true
 png.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+khronos-egl.workspace = true
 
 [[bench]]
 name = "draw"

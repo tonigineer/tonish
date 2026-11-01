@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/renderer", "crates/engine", "crates/tonish"]
 
 [workspace.package]
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 
 [workspace.dependencies]
@@ -14,7 +14,11 @@ clap = { version = "4.6", features = ["derive"] }
 criterion = { version = "0.8.2", default-features = false, features = [
     "cargo_bench_support",
 ] }
+glow = "0.17"
 inotify = "0.11"
+# Loaded when the GPU is first needed, rather than linked, so that tonish
+# starts, and draws on the CPU, where there is no libEGL.
+khronos-egl = { version = "6", features = ["dynamic"] }
 png = "0.18.1"
 serde = { version = "1", features = ["derive"] }
 smithay-client-toolkit = { version = "0.19.2", default-features = false, features = [
@@ -24,6 +28,13 @@ toml = "1.1"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 wayland-client = "0.31"
+# EGL needs libwayland's own wl_display, so the connection goes through
+# libwayland instead of the pure-Rust implementation. Loaded at run time
+# rather than linked, as libwayland-egl is, so that building needs no
+# Wayland development files and a system without libwayland-egl still runs
+# tonish, on the CPU.
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-egl = "0.32"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

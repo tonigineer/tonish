@@ -7,7 +7,7 @@ A shape in tonish isn't a set of pixels or a path. It's a function that gives th
 - outlines, by folding the distance into a band around the edge;
 - independence from the monitor's scale, because shapes live in logical pixels.
 
-A GPU fragment shader works the same way, so a GPU backend can draw the same scenes later.
+The GPU's fragment shader works with the same number, so the CPU and the GPU draw the same scenes, see [The GPU](#the-gpu).
 
 Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
 
@@ -18,6 +18,7 @@ Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one f
 | `distance` | The signed distance from a point to the edge. It has to be the true distance near the edge, or edges and outlines come out uneven. |
 | `inside` | On one row, the stretch that is at least a given depth inside the shape. |
 | `hole` | On one row, the stretch inside the bounds that is at least a given depth outside the shape, such as the middle of an outline. |
+| `sdf` | The shape in the one form the GPU's shader knows. `None` leaves frames with the shape to the CPU. |
 
 ## The CPU rasteriser
 
@@ -31,37 +32,84 @@ A panel is almost all solid background, so almost no pixel needs the distance. D
 
 `inside` and `hole` may give a shorter stretch than the true one, which only costs time, but never a longer one, which would paint over an antialiased edge. Both return `None` by default, so a new shape draws correctly before it has them, only more slowly.
 
-The solid and empty stretches must not change a single byte of the result. A test in `cpu.rs` keeps the plain algorithm as a reference, every pixel of the buffer through `distance`, and compares it with `draw` on 600 random scenes.
+The solid and empty stretches must not change a single byte of the result. [The reference test](testing.md#unit-tests) in `cpu.rs`, `solid_and_empty_stretches_change_no_pixel`, holds `draw` against the plain algorithm, every pixel of the buffer through `distance`.
+
+## The GPU
+
+`gpu::Gpu` in the renderer draws a scene with OpenGL ES 3.0, in one draw call. Every shape becomes an instance of a quad over its box. The fragment shader, `gpu/shape.frag`, computes the distance at each pixel's centre and turns it into coverage exactly as the CPU rasteriser does.
+
+A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with rounded corners, which is also a circle, folded into an outline or not. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
+
+A scene with a shape that has no `sdf`, such as an outline of an outline, is drawn by the CPU rasteriser, and the GPU shows the result as a texture. The surface stays with EGL even then: a compositor with explicit sync, such as Hyprland with NVIDIA's driver, ends the connection when a surface that EGL has drawn into gets a shared-memory buffer.
+
+The two backends agree to within 2 per channel, which `the_gpu_draws_what_the_cpu_draws` in `gpu/mod.rs` checks, see [Testing](testing.md#unit-tests).
+
+## The GPU's thread
+
+The engine draws the first frame on the CPU and starts the GPU only after it, so that the panels never wait for the GPU, see [Running](../using/running.md#the-gpu). libEGL is loaded only then, and not at all with `--disable-gpu`, so tonish runs where there is none.
+
+Everything EGL and OpenGL do happens on a thread of its own, `gles::Thread`, which starts EGL, compiles the shaders and then draws every GPU frame for the rest of the run. Starting takes [about 0.1 s](../using/running.md#the-gpu), which on the engine's thread would stall every surface. And NVIDIA's driver makes the first frame cost about 45 ms on any thread but the one that started EGL, and about 2 ms on that one, so the thread that started EGL keeps it. The thread compiles the shaders on a context without a surface, which `EGL_KHR_surfaceless_context` allows and Mesa and NVIDIA's driver offer.
+
+Until the thread reports that it has started, the engine draws every surface on the CPU. Then it draws every surface once more, which moves it to the GPU. From then on, the engine builds each frame's scene and sends it to the thread, which is why shapes are `Send`. The thread draws only the latest frame of each surface, so it never falls behind, and draws a scene with a shape the shader doesn't know on the CPU itself.
+
+The thread makes a surface's EGL window at its first frame, and draws that frame twice ahead. EGL allocates a window's buffers only as frames need them, and with NVIDIA's driver each allocation stalls a swap for 0.2 to 2 ms. Drawing ahead gets that done while the surface moves, rather than in the first frames of an animation. An EGL window has to be destroyed before its surface: the engine holds a `gles::Window` for each, and dropping one destroys the window on the thread and waits for that.
+
+If EGL or OpenGL fails, or the thread panics, every window is gone before the thread reports it. The engine then logs a warning, replaces the surfaces that were on the GPU with new ones, and draws everything on the CPU from then on.
 
 ## Adding a shape
 
-1. Add a file in `crates/renderer/src/shapes/` with the struct and its `Shape` implementation, and export it from `shapes/mod.rs`.
+1. Add a file in `crates/renderer/src/shapes/` with the struct and its `Shape` implementation, and export it from `shapes/mod.rs`. The struct has to be `Send`, because scenes go to the GPU's thread.
 2. Implement `inside`, and `hole` if the shape is hollow, unless it is always small. Without them, every pixel it covers goes through `distance`.
-3. Add it to both lists in `shapes/mod.rs`:
+3. Implement `sdf`, so that the GPU draws the shape. If it doesn't fit the shader's form, the form has to grow: in `signed_distance` in `gpu/shape.frag` and in `Sdf::distance`, the same way.
+4. Add it to the three lists in `shapes/mod.rs`:
    - `bounds_enclose_every_shape` checks that `bounds` really contains the shape;
-   - `stretches_hold_for_every_shape` checks `inside` and `hole` against `distance`.
-4. Let `random_shape` in `cpu.rs` produce it, so that the reference test covers it.
+   - `stretches_hold_for_every_shape` checks `inside` and `hole` against `distance`;
+   - `sdf_matches_distance_for_every_shape` checks `sdf` against `distance`.
+5. Let `random_shape`, in the test fixtures in `shapes/mod.rs`, produce it, so that the reference test and the GPU test cover it.
 
 ## Measuring
 
-At 160 Hz a frame has 6.25 ms for everything, drawing included. `crates/renderer/benches/draw.rs` measures the cases that matter:
+At 160 Hz a frame has 6.25 ms for everything, drawing included. `crates/renderer/benches/draw.rs` measures the cases that matter, on the CPU and on the GPU:
 - bars at scale 1 and 2, and 200 pixels thick;
 - 64 small translucent shapes;
 - an opaque full screen;
 - the overlay: a translucent layer over the whole screen with a card on it, the heaviest frame a launcher would draw.
 
 ```sh
+just bench                 # every case, on the CPU and the GPU
+just bench gpu             # only the GPU, or only the CPU with cpu
 just bench-save before     # on the code as it was
 just bench-compare before  # after your change
 ```
 
-Measured on an Intel Core i9-13900K, with the renderer built for that CPU, as `.cargo/config.toml` does:
+The GPU benchmarks draw into a framebuffer without a display, and wait for each frame to be finished. They need an EGL that offers Mesa's surfaceless platform, as [the GPU tests](testing.md#unit-tests) do, and are skipped without one. Neither kind includes showing the frame.
 
-| Case | Time |
-|---|---|
-| `bar/1920x44@2` | 0.11 ms |
-| `bar/1920x200@2` | 0.25 ms |
-| `fullscreen/1920x1080@2` | 1.4 ms |
-| `overlay/1920x1080@2` | 5.1 ms |
+Measured on an Intel Core i9-13900K, with the renderer built for that CPU, as `.cargo/config.toml` does, and an NVIDIA RTX 4090 with the 615 driver:
 
-With `TONISH_LOG=engine=debug`, tonish logs each draw with its size and the time it took, in your own session. `tonish msg redraw` draws every panel again, so you can time a draw whenever you like.
+| Case | CPU | GPU |
+|---|---|---|
+| `bar/1920x44@2` | 0.11 ms | 0.013 ms |
+| `bar/1920x200@2` | 0.25 ms | 0.017 ms |
+| `fullscreen/1920x1080@2` | 1.4 ms | 0.038 ms |
+| `overlay/1920x1080@2` | 5.1 ms | 0.074 ms |
+
+About 13 µs of every GPU time is a fixed cost, the same for any small surface, for handing the frame over and waiting for it.
+
+### In your session
+
+With `TONISH_LOG=engine=debug`, tonish logs each draw in your own session, with its size, the time it took, and `on=cpu` or `on=gpu`. Here tonish starts, gets `tonish msg redraw`, and ends with Ctrl+C:
+
+```text
+   0.000068827s  INFO engine::socket: listening socket=/run/user/1000/tonish-wayland-1.sock
+   0.000345361s  INFO engine::wayland: monitor added monitor=HEADLESS-1 size=(1920.0, 1080.0) scale=2 surfaces=1
+   0.000822006s DEBUG engine::wayland: drew monitor=HEADLESS-1 surface=0 size=(3840, 88) on=cpu took=434.15µs
+   0.025970083s DEBUG engine::gles: EGL started vendor=NVIDIA took=25.082495ms
+   0.073747646s  INFO engine::gles: GPU started device=NVIDIA GeForce RTX 4090/PCIe/SSE2 took=72.860185ms
+   0.076255002s DEBUG engine::gles: moved to the GPU monitor=HEADLESS-1 surface=0 took=2.471874ms
+   0.076309759s DEBUG engine::gles: drew monitor=HEADLESS-1 surface=0 size=(3840, 88) on=gpu took=49.795µs waited=8.395µs
+   1.501222744s DEBUG engine::wayland: message msg=redraw reply=ok
+   1.501401184s DEBUG engine::gles: drew monitor=HEADLESS-1 surface=0 size=(3840, 88) on=gpu took=139.086µs waited=21.584µs
+   1.802231057s  INFO engine::wayland: shutting down signal=SIGINT
+```
+
+`tonish msg redraw` draws every panel again, so you can time a draw whenever you like, and `--disable-gpu` keeps the panels on the CPU to compare. For a GPU draw, `took` is the time spent on the frame, building its scene on the engine's thread and drawing and swapping it on the GPU's thread, and `waited` is how long it waited in between for the GPU's thread, busy with other frames. Neither is the GPU's own work, which only the benchmarks measure. `moved to the GPU` is the time it took to make the surface's EGL window and draw its first frame twice ahead. Starting the GPU is no part of any draw: the `GPU started` line has a time of its own.

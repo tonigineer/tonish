@@ -1,7 +1,7 @@
 //! Evaluates the signed distance at the pixels a shape may cover only
-//! partly, exactly as a GPU fragment shader would, so that its output stays
-//! a faithful reference for a future GPU backend and a fallback where there
-//! is no GPU. Where a shape says a stretch of a row is solid, or empty, the
+//! partly, exactly as the GPU's fragment shader does, so that its output is
+//! the reference the GPU is tested against, and the fallback where there is
+//! no GPU. Where a shape says a stretch of a row is solid, or empty, the
 //! answer is known without the distance. That saves nearly all the work,
 //! because a panel is almost all solid background. The tests compare every
 //! pixel with the plain evaluation of every pixel, so the stretches are
@@ -146,6 +146,7 @@ fn around(row: Range<usize>, mut cuts: [Range<usize>; 2]) -> impl Iterator<Item 
 mod tests {
     use super::*;
     use crate::scene::{Rgba, Scene};
+    use crate::shapes::fixtures::{Dice, random_shape};
     use crate::shapes::{Circle, Rect};
 
     /// A fresh buffer for every query, so that no test can depend on what
@@ -193,62 +194,6 @@ mod tests {
                     (alpha * 255.0 + bytes[3] as f32 * keep + 0.5) as u8,
                 ];
             }
-        }
-    }
-
-    /// xorshift, so that the scenes are random but the same on every run,
-    /// and a failure can be reproduced.
-    struct Dice(u32);
-
-    impl Dice {
-        fn roll(&mut self) -> f32 {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 17;
-            self.0 ^= self.0 << 5;
-            self.0 as f32 / u32::MAX as f32
-        }
-
-        fn between(&mut self, lo: f32, hi: f32) -> f32 {
-            lo + (hi - lo) * self.roll()
-        }
-
-        /// Half the time on the half-pixel grid, because edges on whole
-        /// pixels put pixel centres exactly at the depth the stretches are
-        /// cut at, which is where rounding would show.
-        fn coordinate(&mut self, lo: f32, hi: f32) -> f32 {
-            let v = self.between(lo, hi);
-            if self.roll() < 0.5 {
-                (v * 2.0).round() / 2.0
-            } else {
-                v
-            }
-        }
-    }
-
-    fn random_shape(dice: &mut Dice, (w, h): (f32, f32)) -> Box<dyn Shape> {
-        let opacity = if dice.roll() < 0.5 { 1.0 } else { dice.roll() };
-        let channel = |dice: &mut Dice| (dice.roll() * 255.0) as u8;
-        let color = Rgba::from_rgb(channel(dice), channel(dice), channel(dice), opacity);
-        let (x, y) = (
-            dice.coordinate(-5.0, w + 5.0),
-            dice.coordinate(-5.0, h + 5.0),
-        );
-        let (dx, dy) = (
-            dice.coordinate(0.0, w / 2.0),
-            dice.coordinate(0.0, h / 2.0 + 2.0),
-        );
-        let rect = rect(x - dx, y - dy, x + dx, y + dy, color);
-        let circle = Circle {
-            center: Point::new(x, y),
-            r: dice.coordinate(0.5, h.max(4.0)),
-            color,
-        };
-        let width = dice.coordinate(0.5, 4.0);
-        match (dice.roll() * 4.0) as u32 {
-            0 => Box::new(rect),
-            1 => Box::new(circle),
-            2 => Box::new(rect.outline(width, color)),
-            _ => Box::new(circle.outline(width, color)),
         }
     }
 
