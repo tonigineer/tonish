@@ -178,6 +178,8 @@ pub fn run(app: Box<dyn App>, options: Options) -> Result<(), String> {
         grab: None,
         popup: None,
         wanted: None,
+        popup_waits: None,
+        grab_failed: false,
         outs: Vec::new(),
         app,
         scene: Scene::new(),
@@ -356,6 +358,13 @@ struct Engine {
     /// [`App::popup`]'s answer when last asked, so that a popup opens only
     /// when the answer changes.
     wanted: Option<PopupSpec>,
+    /// From when the popup opened or changed whether it takes the keyboard,
+    /// until a frame of it sent since is committed, which carries that
+    /// change to the compositor: its grab waits for that.
+    popup_waits: Option<Instant>,
+    /// Taking the grab failed for this answer of [`App::popup`], so that it
+    /// isn't tried again at every batch.
+    grab_failed: bool,
     outs: Vec<Out>,
     app: Box<dyn App>,
     scene: Scene,
@@ -736,6 +745,9 @@ impl Engine {
         }
         surf.role.wl_surface().set_buffer_scale(scale);
         self.draw_cpu(t, &monitor, px, scale);
+        if on == On::Popup {
+            self.popup_waits = None;
+        }
         let took = started.elapsed();
         debug!(
             monitor = %monitor,
@@ -817,7 +829,12 @@ impl Engine {
                     self.draw(t);
                 }
             }
-            gles::Report::Drew(on, drawn) => self.app.drew(on, drawn),
+            gles::Report::Drew(on, drawn, sent) => {
+                if on == On::Popup && self.popup_waits.is_some_and(|since| sent >= since) {
+                    self.popup_waits = None;
+                }
+                self.app.drew(on, drawn);
+            }
             gles::Report::Failed(e) if matches!(self.gles, GlesState::Starting(_)) => {
                 warn!("cannot use the GPU, so every surface is drawn on the CPU: {e}");
                 self.gles = GlesState::Failed;

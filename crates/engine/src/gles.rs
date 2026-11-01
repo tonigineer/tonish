@@ -126,8 +126,9 @@ impl Drop for Display {
 pub(crate) enum Report {
     /// It takes frames from now on, on this device.
     Started(String),
-    /// A frame is on the screen's way, for the app's statistics.
-    Drew(On, Drawn),
+    /// A frame is on the screen's way, for the app's statistics, and when the
+    /// engine sent it, to tell what was committed before it.
+    Drew(On, Drawn, Instant),
     /// It failed, to start or later, and has ended. Every window was gone
     /// before it said so, so the engine may destroy the surfaces.
     Failed(String),
@@ -289,8 +290,8 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
         }
         for (key, frame) in frames.drain(..) {
             match gles.draw(&mut windows, key, frame) {
-                Ok((on, drawn)) => {
-                    let _ = report.send(Report::Drew(on, drawn));
+                Ok((on, drawn, sent)) => {
+                    let _ = report.send(Report::Drew(on, drawn, sent));
                 }
                 Err(e) => {
                     windows.clear();
@@ -348,7 +349,7 @@ impl Gles {
         windows: &mut HashMap<u64, EglWindow>,
         key: u64,
         frame: Frame,
-    ) -> Result<(On, Drawn), String> {
+    ) -> Result<(On, Drawn, Instant), String> {
         let waited = frame.sent.elapsed();
         let (window, fresh) = match windows.entry(key) {
             Entry::Occupied(window) => (window.into_mut(), false),
@@ -392,7 +393,7 @@ impl Gles {
                 self.show(window, &frame)?;
             }
         }
-        Ok((frame.on, drawn))
+        Ok((frame.on, drawn, frame.sent))
     }
 
     /// Draws the frame and commits the surface, which the buffer swap

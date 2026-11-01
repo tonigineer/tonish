@@ -39,9 +39,9 @@ The fixture is a `Desktop` from `harness.py`, with what tests need to look at to
 - `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels;
 - `click(x, y, button)` to click in the layout's logical pixels, with a button as Linux names it, such as `BTN_RIGHT`;
 - `drag(points, seconds)` to press the left button at the first point, move through the others and let go at the last, with the virtual pointer's own motion: sway passes no motion on for its `seat - cursor` commands while a button is held;
-- `key(name)` to type a key, such as `Escape`, with wtype.
+- `key(name)` to press a key, such as `Escape`, and let it go.
 
-The headless sway has no input devices, so it offers clients no pointer. The first `click` gives it one with a `VirtualPointer`, a Wayland client in the harness that speaks the wire protocol itself, and then clicks with sway's `seat - cursor` commands. Tests that type keys are skipped where wtype isn't installed.
+The headless sway has no input devices, so it offers clients no pointer or keyboard. The first `click` gives it a pointer with a `VirtualPointer`, a Wayland client in the harness that speaks the wire protocol itself, and then clicks with sway's `seat - cursor` commands. A `VirtualKeyboard` of the same kind joins as sway starts, before tonish, as a real keyboard would be: a keyboard that appears while a popup holds the grab never learns of it. It has the standard evdev keymap, so that a key's number is Linux's own, which tonish reads without a layout; wtype uploads a keymap of its own, which numbers keys in the order it types them.
 
 The module also has `wait_for`, which polls a condition for up to three seconds, and `near`, which compares colours with the tolerance that scaling needs.
 
@@ -80,4 +80,4 @@ A pull request into `main` runs these jobs. The others wait for "Version raised"
 | Version raised | The version is newer than on `main`, except for branches named `fix/*`. |
 | Lint | Formatting, clippy and ruff, and that the API documentation and this book build. |
 | Build | That `Cargo.lock` is up to date, the tests, then the release build, packaged as it would be released. |
-| Desktop | The general desktop tests, in an Arch Linux container with Mesa and wtype, with the packaged binary. When they fail, the screenshots are kept as the `desktop-screenshots` artifact. |
+| Desktop | The general desktop tests, in an Arch Linux container with Mesa and a monospace font, with the packaged binary. When they fail, the screenshots are kept as the `desktop-screenshots` artifact. |

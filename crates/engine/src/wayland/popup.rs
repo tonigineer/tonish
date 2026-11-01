@@ -21,6 +21,8 @@ use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_vie
 use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewporter;
 pub(super) use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use smithay_client_toolkit::shell::xdg::XdgShell;
+use std::time::Instant;
+
 use tracing::{debug, warn};
 
 use super::{Engine, Role, Surface, Target, name};
@@ -29,12 +31,44 @@ use crate::app::PopupSpec;
 impl Engine {
     /// Called after every batch of events, after the app has heard of them
     /// all, so that a popup opened for a button press opens in the same
-    /// batch and its grab can still name that press.
+    /// batch as the press.
     pub(super) fn update_popup(&mut self) {
         let wanted = self.app.popup();
-        if wanted == self.wanted {
+        if wanted != self.wanted {
+            self.grab_failed = false;
+            self.change_popup(wanted);
+        }
+        self.take_grab();
+    }
+
+    /// The grab, once the popup is on the screen and has the keyboard: a
+    /// grab keeps the keyboard where it is as it starts, and sway lets no
+    /// surface take it while the grab lasts, so a grab taken before the
+    /// popup could take the keyboard leaves Escape with some window. It
+    /// still names the press the popup opened for, which wlroots and
+    /// Hyprland accept a few frames late.
+    fn take_grab(&mut self) {
+        let Some(spec) = self.wanted.clone() else {
+            return;
+        };
+        if !spec.grab
+            || self.grab.is_some()
+            || self.grab_failed
+            || self.popup.is_none()
+            || self.popup_waits.is_some()
+        {
             return;
         }
+        if let Err(e) = self.open_grab(&spec) {
+            warn!("the popup cannot hear of clicks outside it: {e}");
+            self.grab_failed = true;
+            return;
+        }
+        debug!("popup grabbed");
+        self.popup_input(&spec);
+    }
+
+    fn change_popup(&mut self, wanted: Option<PopupSpec>) {
         let before = std::mem::replace(&mut self.wanted, wanted.clone());
         let had_grab = self.grab.is_some();
         let Some(spec) = wanted else {
@@ -61,17 +95,31 @@ impl Engine {
         }
         if !spec.grab {
             self.grab = None;
-        } else if self.grab.is_none()
-            && let Err(e) = self.open_grab(&spec)
+        }
+        let keyboard_changed = before.as_ref().is_none_or(|b| b.grab != spec.grab);
+        if !opened
+            && keyboard_changed
+            && let Some(Surface {
+                role: Role::Popup { layer, .. },
+                ..
+            }) = &self.popup
         {
-            warn!("the popup cannot take the keyboard or hear of clicks outside it: {e}");
+            // Applied with the commit in popup_input; the grab waits for a
+            // frame after it.
+            layer.set_keyboard_interactivity(keyboard(&spec));
+            self.popup_waits = Some(Instant::now());
         }
         // Only when it changed: a card that comes to rest changes the spec
         // at every frame, but its input region only as it moves, and each
         // change commits two surfaces.
         let input = before.as_ref().is_none_or(|b| b.input != spec.input);
-        if opened || input || had_grab != self.grab.is_some() {
+        if opened || input || keyboard_changed || had_grab != self.grab.is_some() {
             self.popup_input(&spec);
+        }
+        if !opened && keyboard_changed && spec.grab {
+            // A frame for the grab to wait for, which a card at rest
+            // wouldn't draw.
+            self.draw(Target::Popup);
         }
     }
 
@@ -94,8 +142,9 @@ impl Engine {
         layer.set_exclusive_zone(-1);
         layer.set_margin(spec.at.1, 0, 0, spec.at.0);
         layer.set_size(spec.size.0, spec.size.1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_keyboard_interactivity(keyboard(spec));
         layer.commit();
+        self.popup_waits = Some(Instant::now());
         debug!(
             monitor = %name(&out.info),
             at = ?spec.at,
@@ -118,8 +167,8 @@ impl Engine {
     }
 
     /// A transparent xdg_popup exactly over the popup, which holds the
-    /// compositor's grab: the keyboard, and the end of the grab on a click
-    /// outside. The popup the app draws can't hold it, because a layer
+    /// compositor's grab, which a click outside ends. The popup the app
+    /// draws can't hold it, because a layer
     /// surface can't take a grab. It takes the pointer for the popup too,
     /// where the popup does, since Hyprland lets only the grab's own surface
     /// have it during the grab, a layer surface's popup having no parent
@@ -209,6 +258,18 @@ impl Engine {
 
     fn is_grab(&self, popup: &Popup) -> bool {
         self.grab.as_ref().is_some_and(|g| &g.popup == popup)
+    }
+}
+
+/// The popup's own layer surface takes the keyboard while it holds the
+/// grab. The grab doesn't give it: it keeps keys going to the surface that
+/// had them, and on sway that is never the bar, a layer surface that takes
+/// no keyboard, so Escape would reach some window instead.
+fn keyboard(spec: &PopupSpec) -> KeyboardInteractivity {
+    if spec.grab {
+        KeyboardInteractivity::Exclusive
+    } else {
+        KeyboardInteractivity::None
     }
 }
 

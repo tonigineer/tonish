@@ -118,8 +118,10 @@ pub struct PopupSpec {
     pub size: (u32, u32),
     /// While `true`, it holds the grab: it gets the keyboard, and a click
     /// outside every surface of the app reaches [`App::popup_dismissed`]
-    /// instead of the window under it. A grab can only start in the batch of
-    /// a button press, so turning it on later does nothing.
+    /// instead of the window under it. The grab starts once the popup shows
+    /// with the keyboard, a frame or so later, naming the last button press,
+    /// so turn it on in the batch of a press: compositors accept a grab only
+    /// shortly after one.
     pub grab: bool,
     /// The part that takes the pointer, as x, y, width and height in logical
     /// pixels on the popup. Clicks elsewhere go to whatever is under it.
@@ -241,8 +243,8 @@ pub trait App {
         Cursor::Default
     }
 
-    /// Only a popup's grab gets the keyboard, so keys arrive only while one
-    /// holds it.
+    /// Only a popup that holds the grab gets the keyboard, so keys arrive
+    /// only then.
     fn key(&mut self, _key: Key) {}
 
     /// Asked after every batch of events, like [`App::to_redraw`]. A popup

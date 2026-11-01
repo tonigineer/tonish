@@ -1,8 +1,25 @@
 import shutil
+import subprocess
 import time
 
 import pytest
 from harness import near, wait_for
+
+
+def monospace():
+    """The font tonish sets the figures in, as it finds it: fontconfig alone,
+    without a font installed, names none."""
+    if shutil.which("fc-match") is None:
+        return None
+    # Not checked: no font is no error, only no file named.
+    found = subprocess.run(
+        ["fc-match", "--format=%{file}", "monospace"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return found.stdout.strip() or None
+
 
 # The figures sit below the bar, 8 px in from the monitor's corner: from
 # (8, 52) to (308, 144).
@@ -26,7 +43,7 @@ def test_the_figures_show_in_the_top_left_corner(desktop):
     assert desktop.workspaces() == [(0, 44, 1920, 1080 - 44)] * 2
 
 
-@pytest.mark.skipif(shutil.which("fc-match") is None, reason="needs fontconfig")
+@pytest.mark.skipif(monospace() is None, reason="needs fontconfig and a font")
 def test_the_figures_are_text(desktop):
     desktop.wait_for_panels()
 

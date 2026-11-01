@@ -1,5 +1,3 @@
-import shutil
-
 import pytest
 from harness import near, wait_for
 
@@ -19,6 +17,8 @@ def opened(desktop):
     desktop.click(800, 20, "BTN_RIGHT")
     assert wait_for(lambda: shown(desktop)), f"at {INSIDE}: {desktop.at(*INSIDE)}"
     assert "popup opened" in desktop.logged(), desktop.logged()
+    # The keyboard and the clicks outside, a frame after it shows.
+    assert wait_for(lambda: "popup grabbed" in desktop.logged()), desktop.logged()
 
 
 def test_a_right_click_on_the_bar_hangs_the_settings_below_it(desktop):
@@ -96,7 +96,6 @@ def stopped(desktop):
     return popup_draws(desktop) == before
 
 
-@pytest.mark.skipif(shutil.which("wtype") is None, reason="needs wtype")
 def test_escape_closes_the_settings(desktop):
     opened(desktop)
     desktop.key("Escape")
@@ -142,8 +141,10 @@ def test_docked_again_a_press_on_its_grip_takes_the_grab_back(desktop):
     desktop.drag([(800, 600), (800, 300), (800, 60)], seconds=0.6)
     assert wait_for(lambda: shown(desktop)), desktop.at(*INSIDE)
     assert wait_for(lambda: stopped(desktop)), desktop.logged()
-    # Only the grab hears of a click outside every surface of tonish.
+    # Only the grab hears of a click outside every surface of tonish, and it
+    # starts a frame after the press, once the card has the keyboard.
     desktop.click(*GRIP, "BTN_LEFT")
+    assert wait_for(lambda: desktop.logged().count("popup grabbed") == 2)
     desktop.click(1000, 600, "BTN_LEFT")
     assert wait_for(lambda: "popup dismissed" in desktop.logged()), desktop.logged()
     assert wait_for(lambda: not shown(desktop)), desktop.at(*INSIDE)

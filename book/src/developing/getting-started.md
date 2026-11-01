@@ -9,7 +9,7 @@
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
 | sway, grim, Mesa | `just desktop`, the [tests on a headless sway](testing.md#desktop-tests). |
-| wtype | The desktop tests that type keys, which are skipped without it. |
+| A monospace font | The desktop test of the text in the figures in the corner, which is skipped without one. |
 | [uv](https://docs.astral.sh/uv/) | The Python tools: pytest for `just desktop`, ruff for `just fmt` and `just lint`. uv installs them at the versions in `uv.lock`. |
 | [mdBook](https://rust-lang.github.io/mdBook/) 0.5 | `just book`, this book |
 
