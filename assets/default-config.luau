@@ -1,0 +1,80 @@
+-- tonish settings
+--
+-- tonish wrote this file on its first start. Edit it, and tonish applies the
+-- changes as soon as you save.
+-- Delete it to get the defaults back on the next start. A setting you leave
+-- out takes its default.
+--
+-- The file is Luau. It runs once for every monitor, and returns that
+-- monitor's settings. `monitor` describes it: its name, such as "DP-1", and
+-- its width, height and scale, in pixels as your compositor counts them. A
+-- setting can follow it, such as
+--
+--     length = monitor.width - 600,
+--
+-- for a bar 300 pixels short of either end of every monitor.
+--
+-- tonish writes tonish.d.luau beside this file: load it in luau-lsp, and
+-- your editor completes the settings and marks a misspelt one.
+
+local settings: Settings = {
+    -- The width of the line around the bar and every panel, in pixels. 0
+    -- draws none. One width for all of them, so that the bar's line runs on
+    -- round the panels that open from it.
+    border = 0,
+
+    -- The bar along an edge of every monitor.
+    bar = {
+        -- Orientation.Horizontal puts the bar along the top of every
+        -- monitor, Orientation.Vertical down the left.
+        orientation = Orientation.Horizontal,
+
+        -- How thick the bar is, in pixels.
+        thickness = 44,
+
+        -- How long the bar is along its edge, in pixels. 0 spans the whole
+        -- monitor; a shorter bar sits in the middle of the edge.
+        length = 0,
+
+        -- How far the bar keeps from its edge, in pixels.
+        gap = 0,
+
+        -- How round the bar's corners are, in pixels, up to half its
+        -- thickness. One number, such as radius = 12, rounds every corner
+        -- alike. A corner left out of the table is square.
+        radius = {
+            top_left = 0,
+            top_right = 0,
+            bottom_right = 0,
+            bottom_left = 0,
+        },
+
+        -- Only for a bar shorter than the monitor, with a gap of 0: it curves
+        -- out into its edge at its corners there, with this radius in
+        -- pixels, up to its thickness less the radius of its far corners or
+        -- the border, whichever is larger. 0 rounds those corners like the
+        -- others instead.
+        inverse_radius = 0,
+    },
+
+    -- Every panel that opens from the bar, such as the settings, which open
+    -- on a right-click on the bar.
+    panel = {
+        -- How round a panel's corners away from the bar are, in pixels, as
+        -- for the bar. The corners at the bar follow inverse_radius instead.
+        radius = {
+            top_left = 14,
+            top_right = 14,
+            bottom_right = 14,
+            bottom_left = 14,
+        },
+
+        -- A panel is part of the bar it opens from, and curves out of it at
+        -- its corners there, with this radius in pixels. 0 meets the bar in a
+        -- sharp corner. No line runs between a panel and the bar: the bar's
+        -- line turns into the panel's where they meet.
+        inverse_radius = 14,
+    },
+}
+
+return settings

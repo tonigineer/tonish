@@ -1,71 +1,47 @@
 use super::{Sdf, Shape};
 use crate::scene::{Point, Rgba};
 
-/// A concave corner: the `r` × `r` square at the corner where two edges
-/// meet, less the quarter circle that rounds the one into the other. Laid in
-/// the corner between two shapes of the same colour, it joins them in a
-/// curve. `at` is the square's filled corner, and `corner` says which of the
-/// square's corners that is.
+/// A rectangle with a circle cut out of it. Laid in the corner where two
+/// shapes of the same colour meet at a right angle, with the circle centred
+/// on the corner's far side, it joins them in a concave curve. The circle is
+/// free of the rectangle, rather than always reaching its far corner, so
+/// that a border's fill can share the line's centre with a larger radius,
+/// which keeps the line as wide along the curve as along the sides.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fillet {
-    pub at: Point,
-    pub corner: Corner,
+    /// The rectangle's top-left and bottom-right corners.
+    pub p0: Point,
+    pub p1: Point,
+    pub center: Point,
     pub r: f32,
     pub color: Rgba,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Corner {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-impl Fillet {
-    /// The square's corners, and the centre of the circle cut out of it,
-    /// which is the corner opposite `at`.
-    fn geometry(&self) -> ([Point; 2], Point) {
-        let r = self.r;
-        let (dx, dy) = match self.corner {
-            Corner::TopLeft => (r, r),
-            Corner::TopRight => (-r, r),
-            Corner::BottomLeft => (r, -r),
-            Corner::BottomRight => (-r, -r),
-        };
-        let far = Point::new(self.at.x + dx, self.at.y + dy);
-        let p0 = Point::new(self.at.x.min(far.x), self.at.y.min(far.y));
-        let p1 = Point::new(self.at.x.max(far.x), self.at.y.max(far.y));
-        ([p0, p1], far)
-    }
-}
-
 impl Shape for Fillet {
     fn bounds(&self) -> [Point; 2] {
-        self.geometry().0
+        [self.p0, self.p1]
     }
 
     fn color(&self) -> Rgba {
         self.color
     }
 
-    /// The square's distance, with the circle's taken away: exact near the
-    /// arc and near the square's edges, which is all antialiasing needs.
+    /// The rectangle's distance, with the circle's taken away: exact near
+    /// the arc and near the rectangle's edges, which is all antialiasing
+    /// needs.
     fn distance(&self, p: Point) -> f32 {
-        let ([p0, p1], cut) = self.geometry();
-        let (cx, cy) = ((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-        let h = self.r / 2.0;
-        let (qx, qy) = ((p.x - cx).abs() - h, (p.y - cy).abs() - h);
-        let square = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0);
-        square.max(self.r - (p.x - cut.x).hypot(p.y - cut.y))
+        let (cx, cy) = ((self.p0.x + self.p1.x) / 2.0, (self.p0.y + self.p1.y) / 2.0);
+        let (hx, hy) = ((self.p1.x - self.p0.x) / 2.0, (self.p1.y - self.p0.y) / 2.0);
+        let (qx, qy) = ((p.x - cx).abs() - hx, (p.y - cy).abs() - hy);
+        let rect = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0);
+        rect.max(self.r - (p.x - self.center.x).hypot(p.y - self.center.y))
     }
 
     fn sdf(&self) -> Option<Sdf> {
-        let ([p0, p1], cut) = self.geometry();
         Some(Sdf {
-            center: Point::new((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0),
-            half: Point::new(self.r / 2.0, self.r / 2.0),
-            cut,
+            center: Point::new((self.p0.x + self.p1.x) / 2.0, (self.p0.y + self.p1.y) / 2.0),
+            half: Point::new((self.p1.x - self.p0.x) / 2.0, (self.p1.y - self.p0.y) / 2.0),
+            cut: self.center,
             cut_radius: self.r,
             ..Sdf::default()
         })
@@ -79,7 +55,7 @@ mod tests {
 
     #[test]
     fn it_fills_the_corner_and_leaves_the_circle_empty() {
-        // Its filled corner is (10, 0); the circle is centred on (2, 8).
+        // The rectangle is (2, 0) to (10, 8); the circle is centred on (2, 8).
         assert!(fillet().distance(Point::new(9.5, 0.5)) < 0.0);
         assert!(fillet().distance(Point::new(3.0, 7.0)) > 0.0);
     }
@@ -92,8 +68,9 @@ mod tests {
     }
 
     #[test]
-    fn its_bounds_are_the_square() {
-        let [p0, p1] = fillet().bounds();
-        assert_eq!((p0, p1), (Point::new(2.0, 0.0), Point::new(10.0, 8.0)));
+    fn a_circle_larger_than_the_rectangle_cuts_further_in() {
+        let wider = Fillet { r: 9.0, ..fillet() };
+        let p = Point::new(6.5, 1.5);
+        assert!(wider.distance(p) > fillet().distance(p));
     }
 }

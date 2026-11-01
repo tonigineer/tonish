@@ -95,6 +95,9 @@ pub struct PopupSpec {
     /// panel at the pointer.
     pub anchor: (i32, i32, i32, i32),
     pub side: Side,
+    /// Logical pixels between the anchor and the popup. Negative overlaps
+    /// them.
+    pub gap: i32,
     /// Logical pixels.
     pub size: (u32, u32),
 }

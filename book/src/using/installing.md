@@ -16,7 +16,7 @@ tonish loads these libraries when it runs, and every Wayland desktop has them:
 - `libwayland-client`, always;
 - `libEGL` with a GPU driver, and `libwayland-egl`, once tonish starts the [GPU](running.md#the-gpu), which `--disable-gpu` prevents. Without them, tonish draws everything on the CPU.
 
-The package also holds `config.toml`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
+The package also holds `config.luau`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
 
 ## From source
 

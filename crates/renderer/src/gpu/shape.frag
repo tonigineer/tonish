@@ -5,8 +5,8 @@
 precision highp float;
 
 flat in vec4 v_box;
-flat in vec2 v_shape;
-flat in vec3 v_cut;
+flat in vec4 v_radii;
+flat in vec4 v_cut;
 flat in vec4 v_color;
 
 uniform vec2 u_size;
@@ -19,10 +19,15 @@ out vec4 o_color;
 // there. Not named distance, which is a built-in that Mesa, unlike NVIDIA,
 // refuses to have redefined.
 float signed_distance(vec2 p) {
-    vec2 q = abs(p - v_box.xy) - v_box.zw + v_shape.x;
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - v_shape.x;
+    vec2 c = p - v_box.xy;
+    // The corner's own radius; y grows downwards, so a positive c.y is the
+    // bottom half.
+    float r = c.x > 0.0 ? (c.y > 0.0 ? v_radii.z : v_radii.y)
+                        : (c.y > 0.0 ? v_radii.w : v_radii.x);
+    vec2 q = abs(c) - v_box.zw + r;
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
     d = v_cut.z > 0.0 ? max(d, v_cut.z - length(p - v_cut.xy)) : d;
-    return v_shape.y > 0.0 ? abs(d) - v_shape.y * 0.5 : d;
+    return v_cut.w > 0.0 ? abs(d) - v_cut.w * 0.5 : d;
 }
 
 void main() {

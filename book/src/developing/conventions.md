@@ -13,7 +13,7 @@ Comments are for the developers who will change the code later, not for the read
 Some comments are for users instead, and the rules above don't apply to them:
 - the doc comments that clap turns into `--help`;
 - the `[doc(...)]` attributes in the justfile;
-- the comments in `assets/default-config.toml`.
+- the comments in `assets/default-config.luau` and `assets/tonish.d.luau`.
 
 ## Logging
 
@@ -35,6 +35,7 @@ Keep the message a fixed text, and put what varies in fields, as in `info!(monit
 - The CPU rasteriser must not change a byte of its output for the sake of speed. `solid_and_empty_stretches_change_no_pixel` compares it with a plain per-pixel reference, and `just bench` measures it. See [The CPU rasteriser](drawing.md#the-cpu-rasteriser).
 - The GPU draws what the CPU rasteriser draws, to within 2 per channel: `the_gpu_draws_what_the_cpu_draws` compares them. `signed_distance` in `gpu/shape.frag` and `Sdf::distance` are one function, written twice, and change together. See [The GPU](drawing.md#the-gpu).
 - A surface that EGL has drawn into never gets a shared-memory buffer again: compositors with explicit sync end the connection for it. The GPU shows what the CPU draws as a texture instead, and a failed GPU gets new surfaces. See [The GPU's thread](drawing.md#the-gpus-thread).
+- A setting changes in `config.rs`, `assets/default-config.luau` and `assets/tonish.d.luau` together: the shipped file sets every setting, and the types name every setting and constant, which `the_shipped_file_sets_every_setting` and `the_types_name_every_setting_and_constant` check. Run `luau-lsp analyze --platform standard --definitions @tonish=assets/tonish.d.luau assets/default-config.luau` after a change to either file.
 
 ## The book
 

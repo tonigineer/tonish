@@ -1,8 +1,8 @@
 # Running
 
 ```sh
-tonish                          # with the settings from ~/.config/tonish/config.toml
-tonish --config ~/test.toml     # with the settings from another file
+tonish                          # with the settings from ~/.config/tonish/config.luau
+tonish --config ~/test.luau     # with the settings from another file
 ```
 
 | Option | What it does |

@@ -24,8 +24,9 @@ const IMAGE: [&str; 2] = [include_str!("image.vert"), include_str!("image.frag")
 #[derive(Clone, Copy)]
 struct Instance {
     rect: [f32; 4],
-    shape: [f32; 2],
-    cut: [f32; 3],
+    radii: [f32; 4],
+    /// The cut's centre and radius, and the outline's width.
+    cut: [f32; 4],
     color: [u8; 4],
 }
 
@@ -109,9 +110,9 @@ impl Gpu {
             let stride = size_of::<Instance>() as i32;
             for (index, size, kind, offset) in [
                 (0, 4, glow::FLOAT, 0),
-                (1, 2, glow::FLOAT, 16),
-                (2, 3, glow::FLOAT, 24),
-                (3, 4, glow::UNSIGNED_BYTE, 36),
+                (1, 4, glow::FLOAT, 16),
+                (2, 4, glow::FLOAT, 32),
+                (3, 4, glow::UNSIGNED_BYTE, 48),
             ] {
                 gl.enable_vertex_attrib_array(index);
                 // Normalised, so that the colour bytes arrive as 0..1.
@@ -168,8 +169,8 @@ impl Gpu {
             let c = shape.color();
             self.instances.push(Instance {
                 rect: [sdf.center.x, sdf.center.y, sdf.half.x, sdf.half.y],
-                shape: [sdf.radius, sdf.outline],
-                cut: [sdf.cut.x, sdf.cut.y, sdf.cut_radius],
+                radii: sdf.radii,
+                cut: [sdf.cut.x, sdf.cut.y, sdf.cut_radius, sdf.outline],
                 color: [c.r, c.g, c.b, c.a],
             });
         }

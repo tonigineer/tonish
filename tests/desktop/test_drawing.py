@@ -38,14 +38,14 @@ def test_the_bar_is_drawn_with_its_logo(desktop):
 
 def shaped(desktop, text):
     desktop.wait_for_panels()
-    desktop.settings.write_text(f'orientation = "horizontal"\nthickness = 44\n{text}\n')
+    desktop.settings.write_text(f"return {{ bar = {{ thickness = 44, {text} }} }}\n")
     assert wait_for(lambda: "settings changed" in desktop.logged()), desktop.logged()
 
 
 @pytest.mark.local
 def test_a_shorter_panel_hangs_from_the_top_through_concave_corners(desktop):
     surface = (0x11, 0x13, 0x18)
-    shaped(desktop, "length = 600\nradius = 12")
+    shaped(desktop, "length = 600, radius = 12, inverse_radius = 12")
     # 600 px in the middle of 1920: from 660 to 1260.
     assert wait_for(lambda: not near(desktop.at(100, 22), surface)), desktop.at(100, 22)
     assert near(desktop.at(960, 22), surface), desktop.at(960, 22)
@@ -60,7 +60,7 @@ def test_a_shorter_panel_hangs_from_the_top_through_concave_corners(desktop):
 @pytest.mark.local
 def test_a_panel_off_its_edge_rounds_every_corner(desktop):
     surface = (0x11, 0x13, 0x18)
-    shaped(desktop, "length = 600\nradius = 12\ngap = 10")
+    shaped(desktop, "length = 600, radius = 12, gap = 10")
     # From 10 down: the gap above it shows what is behind.
     assert wait_for(lambda: not near(desktop.at(960, 5), surface)), desktop.at(960, 5)
     assert near(desktop.at(960, 30), surface), desktop.at(960, 30)

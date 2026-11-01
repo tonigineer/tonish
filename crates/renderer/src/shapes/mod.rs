@@ -13,7 +13,7 @@ mod rect;
 mod rounded;
 
 pub use circle::Circle;
-pub use fillet::{Corner, Fillet};
+pub use fillet::Fillet;
 pub use outline::Outline;
 pub use rect::Rect;
 pub use rounded::RoundedRect;
@@ -80,9 +80,9 @@ pub trait Shape: Send {
     }
 }
 
-/// A box with rounded corners, which with the radius at half its size is a
-/// circle, with a circle cut out of it if `cut_radius` is above 0, as for a
-/// [`Fillet`], and folded into an outline if `outline` is above 0. One form
+/// A box with rounded corners, which with every radius at half its size is
+/// a circle, with a circle cut out of it if `cut_radius` is above 0, as for
+/// a [`Fillet`], and folded into an outline if `outline` is above 0. One form
 /// for every shape keeps the shader free of branches per shape, so the GPU
 /// draws a whole scene with a single draw call.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -90,7 +90,8 @@ pub struct Sdf {
     pub center: Point,
     /// Half the width and the height, rounded corners included.
     pub half: Point,
-    pub radius: f32,
+    /// In the order of [`RoundedRect::radii`].
+    pub radii: [f32; 4],
     /// The width of the band centred on the edge, as [`Outline`] draws it.
     pub outline: f32,
     pub cut: Point,
@@ -103,9 +104,7 @@ impl Sdf {
     /// without a GPU. A change to one of the two needs the same change in
     /// the other.
     pub fn distance(&self, p: Point) -> f32 {
-        let qx = (p.x - self.center.x).abs() - self.half.x + self.radius;
-        let qy = (p.y - self.center.y).abs() - self.half.y + self.radius;
-        let mut d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - self.radius;
+        let mut d = rounded_box(self.center, self.half, self.radii, p);
         // Before the outline, so that an outline follows the cut too.
         if self.cut_radius > 0.0 {
             d = d.max(self.cut_radius - (p.x - self.cut.x).hypot(p.y - self.cut.y));
@@ -118,12 +117,29 @@ impl Sdf {
     }
 }
 
+/// The distance to a box with a radius of its own at each corner: each
+/// quarter of the plane is as far as the box rounded by its corner's
+/// radius, which is exact as long as no radius exceeds half the shorter
+/// side.
+fn rounded_box(center: Point, half: Point, radii: [f32; 4], p: Point) -> f32 {
+    let (dx, dy) = (p.x - center.x, p.y - center.y);
+    // y grows downwards, so a positive dy is the bottom half.
+    let r = match (dx > 0.0, dy > 0.0) {
+        (false, false) => radii[0],
+        (true, false) => radii[1],
+        (true, true) => radii[2],
+        (false, true) => radii[3],
+    };
+    let (qx, qy) = (dx.abs() - half.x + r, dy.abs() - half.y + r);
+    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+}
+
 /// Shared by the tests of every shape, of the scene and of both backends, so
 /// that the numbers in their expectations all refer to the same few shapes,
 /// and both backends are held to the same random scenes.
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{Circle, Corner, Fillet, Rect, RoundedRect, Shape};
+    use super::{Circle, Fillet, Rect, RoundedRect, Shape};
     use crate::scene::{Point, Rgba};
 
     pub fn white() -> Rgba {
@@ -164,8 +180,16 @@ pub(crate) mod fixtures {
         RoundedRect {
             p0: Point::new(0.0, 0.0),
             p1: Point::new(30.0, 20.0),
-            r: 4.0,
+            radii: [4.0; 4],
             color: orange(),
+        }
+    }
+
+    /// A different radius at every corner, one of them square.
+    pub fn uneven() -> RoundedRect {
+        RoundedRect {
+            radii: [6.0, 0.0, 3.0, 8.0],
+            ..rounded()
         }
     }
 
@@ -173,8 +197,9 @@ pub(crate) mod fixtures {
     /// a card that hangs from a bar.
     pub fn fillet() -> Fillet {
         Fillet {
-            at: Point::new(10.0, 0.0),
-            corner: Corner::TopRight,
+            p0: Point::new(2.0, 0.0),
+            p1: Point::new(10.0, 8.0),
+            center: Point::new(2.0, 8.0),
             r: 8.0,
             color: orange(),
         }
@@ -232,22 +257,20 @@ pub(crate) mod fixtures {
             color,
         };
         let width = dice.coordinate(0.5, 4.0);
+        let most = dx.min(dy);
         let rounded = RoundedRect {
             p0: rect.p0,
             p1: rect.p1,
-            r: dice.between(0.0, dx.min(dy)),
+            radii: [(); 4].map(|()| dice.between(0.0, most)),
             color,
         };
-        let corners = [
-            Corner::TopLeft,
-            Corner::TopRight,
-            Corner::BottomLeft,
-            Corner::BottomRight,
-        ];
+        let r = dice.coordinate(0.5, h.max(4.0) / 2.0);
+        let corner = Point::new(x + dice.between(-r, r), y + dice.between(-r, r));
         let fillet = Fillet {
-            at: Point::new(x, y),
-            corner: corners[(dice.roll() * 3.999) as usize],
-            r: dice.coordinate(0.5, h.max(4.0) / 2.0),
+            p0: rect.p0,
+            p1: rect.p1,
+            center: corner,
+            r: r + dice.between(0.0, 2.0),
             color,
         };
         match (dice.roll() * 7.0) as u32 {
@@ -264,7 +287,7 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{circle, fillet, rounded, square, white};
+    use super::fixtures::{circle, fillet, rounded, square, uneven, white};
     use super::*;
 
     /// Backends skip every pixel outside `bounds`, so a covered point
@@ -323,6 +346,7 @@ mod tests {
         assert_bounds_enclose(&circle().outline(3.0, white()));
         assert_bounds_enclose(&circle().outline(2.0, white()).outline(1.0, white()));
         assert_bounds_enclose(&rounded());
+        assert_bounds_enclose(&uneven());
         assert_bounds_enclose(&rounded().outline(2.0, white()));
         assert_bounds_enclose(&fillet());
         assert_bounds_enclose(&fillet().outline(1.5, white()));
@@ -359,6 +383,7 @@ mod tests {
         assert_stretches_hold(&circle().outline(3.0, white()));
         assert_stretches_hold(&circle().outline(2.0, white()).outline(1.0, white()));
         assert_stretches_hold(&rounded());
+        assert_stretches_hold(&uneven());
         assert_stretches_hold(&rounded().outline(2.0, white()));
         assert_stretches_hold(&fillet());
         assert_stretches_hold(&fillet().outline(1.5, white()));
@@ -373,6 +398,7 @@ mod tests {
         assert_sdf_matches(&circle().outline(3.0, white()));
         assert_sdf_matches(&circle().outline(2.0, white()).outline(1.0, white()));
         assert_sdf_matches(&rounded());
+        assert_sdf_matches(&uneven());
         assert_sdf_matches(&rounded().outline(2.0, white()));
         assert_sdf_matches(&fillet());
         assert_sdf_matches(&fillet().outline(1.5, white()));
@@ -385,6 +411,7 @@ mod tests {
         assert!(square().outline(3.0, white()).sdf().is_some());
         assert!(circle().outline(3.0, white()).sdf().is_some());
         assert!(rounded().sdf().is_some());
+        assert!(uneven().sdf().is_some());
         assert!(rounded().outline(2.0, white()).sdf().is_some());
         assert!(fillet().sdf().is_some());
         assert!(

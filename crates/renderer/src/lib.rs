@@ -8,4 +8,4 @@ pub mod shapes;
 pub mod snapshot;
 
 pub use scene::{Point, Rgba, Scene};
-pub use shapes::{Circle, Corner, Fillet, Rect, RoundedRect, Shape};
+pub use shapes::{Circle, Fillet, Rect, RoundedRect, Shape};

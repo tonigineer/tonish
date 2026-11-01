@@ -42,7 +42,6 @@ impl Shape for Rect {
         Some(Sdf {
             center: Point::new((self.p0.x + self.p1.x) / 2.0, (self.p0.y + self.p1.y) / 2.0),
             half: Point::new((self.p1.x - self.p0.x) / 2.0, (self.p1.y - self.p0.y) / 2.0),
-            radius: 0.0,
             ..Sdf::default()
         })
     }

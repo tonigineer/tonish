@@ -65,6 +65,14 @@ impl Engine {
         };
         positioner.set_anchor(anchor);
         positioner.set_gravity(gravity);
+        let g = spec.gap;
+        let (dx, dy) = match spec.side {
+            Side::Above => (0, -g),
+            Side::Below => (0, g),
+            Side::Left => (-g, 0),
+            Side::Right => (g, 0),
+        };
+        positioner.set_offset(dx, dy);
         // Slid or flipped rather than cut off at the monitor's edge.
         positioner.set_constraint_adjustment(
             ConstraintAdjustment::SlideX

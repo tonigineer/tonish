@@ -162,7 +162,7 @@ class Desktop:
 
     @property
     def settings(self):
-        return self.dir / "home" / ".config" / "tonish" / "config.toml"
+        return self.dir / "home" / ".config" / "tonish" / "config.luau"
 
     @property
     def socket(self):

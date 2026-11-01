@@ -27,7 +27,7 @@ pub struct Args {
     // The default is only named in the help, not set with `default_value`:
     // it depends on the environment, and `None` lets `load` tell a file asked
     // for from the default one.
-    /// Read the settings from FILE [default: $XDG_CONFIG_HOME/tonish/config.toml]
+    /// Read the settings from FILE [default: $XDG_CONFIG_HOME/tonish/config.luau]
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
@@ -67,7 +67,7 @@ fn default_config(xdg_config_home: Option<OsString>, home: Option<OsString>) -> 
         .filter(|p| p.is_absolute())
         .or_else(|| home.map(|h| PathBuf::from(h).join(".config")))?;
 
-    Some(folder.join("tonish").join("config.toml"))
+    Some(folder.join("tonish").join("config.luau"))
 }
 
 /// A file named with `--config` has to exist, because running with the
@@ -101,6 +101,15 @@ pub fn load(args: Args) -> Result<Shell, String> {
             return Ok(Shell::default());
         }
     }
+    if let Some(dir) = path.parent() {
+        match config::write_types(dir) {
+            Ok(true) => {
+                info!(file = %dir.join("tonish.d.luau").display(), "wrote the settings' types")
+            }
+            Ok(false) => {}
+            Err(e) => warn!(folder = %dir.display(), "cannot write the settings' types: {e}"),
+        }
+    }
     Shell::read(path)
 }
 
@@ -130,13 +139,13 @@ mod tests {
     #[test]
     fn a_settings_file_can_be_given_three_ways() {
         for args in [
-            &["--config", "a.toml"][..],
-            &["--config=a.toml"],
-            &["-c", "a.toml"],
+            &["--config", "a.luau"][..],
+            &["--config=a.luau"],
+            &["-c", "a.luau"],
         ] {
             assert_eq!(
                 parse(args).unwrap().config,
-                Some("a.toml".into()),
+                Some("a.luau".into()),
                 "{args:?}"
             );
         }
@@ -177,11 +186,11 @@ mod tests {
             default_config(xdg.map(Into::into), home.map(Into::into))
         };
         let want = |p: &str| Some(PathBuf::from(p));
-        assert_eq!(at(Some("/x"), Some("/h")), want("/x/tonish/config.toml"));
-        assert_eq!(at(None, Some("/h")), want("/h/.config/tonish/config.toml"));
+        assert_eq!(at(Some("/x"), Some("/h")), want("/x/tonish/config.luau"));
+        assert_eq!(at(None, Some("/h")), want("/h/.config/tonish/config.luau"));
         assert_eq!(
             at(Some("rel"), Some("/h")),
-            want("/h/.config/tonish/config.toml"),
+            want("/h/.config/tonish/config.luau"),
             "relative is ignored"
         );
         assert_eq!(at(None, None), None);
@@ -206,7 +215,7 @@ mod tests {
 
     #[test]
     fn a_settings_file_asked_for_must_exist() {
-        let args = parse(&["--config", "/nonexistent/tonish.toml"]).unwrap();
+        let args = parse(&["--config", "/nonexistent/tonish.luau"]).unwrap();
         assert!(load(args).is_err());
     }
 }

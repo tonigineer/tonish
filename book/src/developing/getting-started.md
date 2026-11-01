@@ -5,6 +5,7 @@
 | Tool | For |
 |---|---|
 | Rust, current stable | everything; the workspace uses edition 2024 |
+| A C++ compiler | Luau, which runs the settings and builds from source with tonish |
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
 | sway, grim, Mesa | `just desktop`, the [tests on a headless sway](testing.md#desktop-tests). |
@@ -41,9 +42,11 @@
 | `crates/renderer` | Shapes, scenes, the CPU rasteriser, the OpenGL ES backend with its shaders in `gpu/`, PNG snapshots, and the benchmarks in `benches/`. It knows nothing of Wayland. |
 | `crates/engine` | The Wayland side: the `App` trait, monitors, layer surfaces, the event loop, the socket, file watching, and EGL with the GPU's thread in `gles.rs`. |
 | `crates/tonish` | The shell: panels, settings, the command line, messages, logging. |
-| `assets/default-config.toml` | The default settings, compiled into tonish and written on its first start. |
+| `assets/default-config.luau` | The default settings, compiled into tonish and written on its first start. |
+| `assets/tonish.d.luau` | The settings' types for luau-lsp, compiled into tonish and written beside the settings. |
 | `tests/desktop/` | The desktop tests, for pytest. |
 | `pyproject.toml`, `uv.lock` | The Python tools for the desktop tests, their versions and their settings. |
 | `book/` | This book. |
 | `.github/workflows/` | CI for pull requests, releases, and the book's site. |
 | `.cargo/config.toml` | Builds for the CPU you build on, which suits benchmarks. Releases override it. |
+| `.zed/settings.json` | Zed's settings for this repository: luau-lsp with the settings' types, so that Zed completes and checks `assets/default-config.luau`. |
