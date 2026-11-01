@@ -14,7 +14,7 @@ The release binary is built for x86-64-v2, which practically every x86-64 CPU st
 
 tonish loads these libraries when it runs, and every Wayland desktop has them:
 - `libwayland-client`, always;
-- `libEGL` with a GPU driver, and `libwayland-egl`, only once a surface moves to the [GPU](running.md#the-gpu). Without them, tonish draws everything on the CPU.
+- `libEGL` with a GPU driver, and `libwayland-egl`, once tonish starts the [GPU](running.md#the-gpu), which `--disable-gpu` prevents. Without them, tonish draws everything on the CPU.
 
 The package also holds `config.toml`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
 

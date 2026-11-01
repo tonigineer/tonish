@@ -6,7 +6,7 @@ tonish reads its settings from `$XDG_CONFIG_HOME/tonish/config.toml`, which is `
 {{#include ../../../assets/default-config.toml}}
 ```
 
-To get the defaults back, delete the file; tonish writes it again on its next start.
+To get the defaults back, delete the file; tonish writes it again on its next start. If it can't write the file at all, for example because your home is read-only, or if neither `XDG_CONFIG_HOME` nor `HOME` is set, it starts with the built-in settings, which are the same, and logs a warning.
 
 | Setting | Values | Default |
 |---|---|---|
@@ -41,5 +41,3 @@ At start, a broken file is an error that ends tonish: it prints what's wrong and
 ## Another file
 
 `tonish --config FILE` reads FILE instead, and watches it the same way. FILE has to exist. Quietly falling back to the defaults would hide a typo in its name.
-
-If tonish can't write its default file at all, for example because your home is read-only, it starts with the built-in settings and logs a warning.

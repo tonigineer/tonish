@@ -13,11 +13,12 @@ By default, tonish logs what happens once or rarely:
 A normal run fits on a screen. The time in front of each line counts seconds since tonish started:
 
 ```text
-   0.000006049s  INFO tonish: starting version=0.0.3
-   0.000058883s  INFO tonish::shell: settings read file=~/.config/tonish/config.toml
-   0.000092376s  INFO engine::socket: listening socket=/run/user/1000/tonish-wayland-1.sock
-   0.000254481s  INFO engine::wayland: monitor added monitor=DP-1 size=(1920.0, 1080.0) scale=2 surfaces=1
-   1.322435010s  INFO engine::wayland: shutting down signal=SIGINT
+   0.000008748s  INFO tonish: starting version=0.0.6
+   0.000045645s  INFO tonish::shell: settings read file=~/.config/tonish/config.toml
+   0.000082751s  INFO engine::socket: listening socket=/run/user/1000/tonish-wayland-1.sock
+   0.000426487s  INFO engine::wayland: monitor added monitor=HEADLESS-1 size=(1920.0, 1080.0) scale=2 surfaces=1
+   0.072090913s  INFO engine::gles: GPU started device=NVIDIA GeForce RTX 4090/PCIe/SSE2 took=70.750925ms
+   1.499787785s  INFO engine::wayland: shutting down signal=SIGINT
 ```
 
 ## More or less
@@ -31,13 +32,13 @@ TONISH_LOG=engine=debug,info tonish       # debug for the engine, info for the r
 TONISH_LOG=warn tonish                    # only what goes wrong
 ```
 
-The levels, from least to most: `off`, `error`, `warn`, `info`, `debug`, `trace`. The parts are the crates: `tonish` for the shell, `engine` for the Wayland side, and `sctk` for smithay-client-toolkit, which the engine uses.
+The levels, from least to most: `off`, `error`, `warn`, `info`, `debug`, `trace`. The parts are the crates: `tonish` for the shell, `engine` for the Wayland side and the GPU, and `sctk` for smithay-client-toolkit, which the engine uses. Without a level for everything, a part that isn't named logs nothing at all: `TONISH_LOG=engine=debug` shows the engine's draws, but not the shell's warnings.
 
 If tonish can't read `TONISH_LOG`, it logs a warning that names the mistake and carries on at the default level.
 
 | Level | What it means |
 |---|---|
 | `error` | Something tonish needs failed, and a panel is wrong or missing until it recovers. |
-| `warn` | Something is wrong, such as a broken settings file, and tonish works around it. |
-| `info` | Starting, settings, monitors, the socket, shutting down. |
-| `debug` | Every event: each draw with its size, its time, whether the CPU or the GPU drew it, and for the GPU how long it waited for its turn, each surface that moves to the GPU, messages and their answers, file changes. |
+| `warn` | Something is wrong, such as a broken settings file or a GPU that can't be used, and tonish works around it. |
+| `info` | Starting, settings, monitors, the socket, the GPU, shutting down. |
+| `debug` | Every event: each draw with its size, its time, whether the CPU or the GPU drew it, and for the GPU how long it waited for its turn; EGL starting, and each surface that moves to the GPU; messages and their answers; file changes. [Measuring](../developing/drawing.md#measuring) explains the draws' times. |

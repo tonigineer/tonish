@@ -42,8 +42,7 @@ pub struct Gpu {
     buffer: glow::Buffer,
     size: Option<glow::UniformLocation>,
     scale: Option<glow::UniformLocation>,
-    /// Kept between frames so that its allocation is reused, as the scene's
-    /// is.
+    /// Kept between frames so that its allocation is reused.
     instances: Vec<Instance>,
     image: glow::Program,
     /// Without attributes, because the image program takes none, while the

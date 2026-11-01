@@ -8,7 +8,7 @@ Three kinds of tests deserve a mention:
 
 - **Property tests on shapes**, in `shapes/mod.rs`. Every shape belongs in their lists. They check that `bounds` contains the shape, and that `inside`, `hole` and `sdf` agree with `distance`.
 - **The reference test** in `cpu.rs`. It draws 600 random scenes both with `draw` and with the plain per-pixel algorithm, and compares every byte. The scenes come from a fixed xorshift, so a failure repeats on every run.
-- **The GPU tests** in `gpu/mod.rs`. They draw random scenes with OpenGL ES into a framebuffer, without a display, and compare them with the CPU rasteriser. They need an EGL that offers Mesa's surfaceless platform, as Mesa and NVIDIA's driver do. Where there is none, they pass without checking anything, and the desktop tests check the GPU instead.
+- **The GPU tests** in `gpu/mod.rs`. `the_gpu_draws_what_the_cpu_draws` draws 200 random scenes with OpenGL ES into a framebuffer, without a display, and allows them to differ from the CPU rasteriser's by 2 per channel. The others check that a frame the CPU drew shows unchanged, and that a shape without `sdf` leaves the frame to the CPU. Their context comes from `gpu/headless.rs`, which the GPU benchmarks share, and needs an EGL that offers Mesa's surfaceless platform, as Mesa and NVIDIA's driver do. Where there is none, the tests pass without checking anything, and the desktop tests check the GPU instead.
 
 ## Desktop tests
 
@@ -20,7 +20,7 @@ Three kinds of tests deserve a mention:
 | `test_settings.py` | Editing the settings, and broken edits |
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
 | `test_drawing.py` | `tonish msg redraw`, and how the bar looks |
-| `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, and `--disable-gpu` never starts it |
+| `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
 - a fresh `HOME`, settings folder and runtime folder, so tests can't affect each other or your desktop;
@@ -29,13 +29,18 @@ A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its 
 The fixture is a `Desktop` from `harness.py`, with what tests need to look at tonish:
 - `workspaces()` for the room left to windows;
 - `at(x, y)` for a pixel;
-- `logged()` for tonish's log, which has the engine at debug level, so that draws can be counted;
+- `logged()` for tonish's log, which has the engine at debug level, and `draws()` for the draws in it;
 - `run_tonish(...)` for a second tonish, such as `tonish msg quit`;
-- `wait_for_panels()` to wait until tonish is ready for messages and edits.
+- `wait_for_panels()` to wait until tonish is ready for messages and edits;
+- `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels.
 
 The module also has `wait_for`, which polls a condition for up to three seconds, and `near`, which compares colours with the tolerance that scaling needs.
 
-A test that compares runs, such as the CPU against the GPU, asks for `desktops` instead: a function that starts one desktop per call, with arguments for tonish, such as `desktops("--disable-gpu")`. The headless sway has no GPU, so Mesa's software renderer stands in for it there.
+A test that compares runs, such as the CPU against the GPU, asks for `desktops` instead: a function that starts one desktop per call, with arguments for tonish, such as `desktops("--disable-gpu")`.
+
+The headless sway draws without a GPU, so Mesa's software renderer stands in for one, even on a machine with NVIDIA's driver: tonish's log names it as `llvmpipe`. That is enough to check the shader and the engine's EGL side, but not how fast either is.
+
+The tests run `target/release/tonish`, which `just desktop` builds first. To test another binary, set `TONISH` to its path.
 
 Tests come in two kinds:
 
@@ -51,7 +56,7 @@ just desktop --lf             # those that failed last time
 just desktop -m "not local"   # what CI runs
 ```
 
-When a test fails, the report ends with the last 20 lines of tonish's log, and a screenshot is saved as `tests/desktop/out/<test>.png`.
+When a test fails, the report ends with the last 20 lines of tonish's log for every desktop that still runs, and a screenshot of each is saved as `tests/desktop/out/<test>.png`, or `<test>-<n>.png` when the test has several.
 
 pytest and ruff come through [uv](https://docs.astral.sh/uv/), at the versions in `uv.lock`, both on your machine and in CI. `pyproject.toml` holds their settings.
 
@@ -63,5 +68,5 @@ A pull request into `main` runs these jobs. The others wait for "Version raised"
 |---|---|
 | Version raised | The version is newer than on `main`, except for branches named `fix/*`. |
 | Lint | Formatting, clippy and ruff, and that the API documentation and this book build. |
-| Build | The tests, then the release build, packaged as it would be released. |
-| Desktop | The general desktop tests, in an Arch Linux container, with the packaged binary. |
+| Build | That `Cargo.lock` is up to date, the tests, then the release build, packaged as it would be released. |
+| Desktop | The general desktop tests, in an Arch Linux container with Mesa, with the packaged binary. When they fail, the screenshots are kept as the `desktop-screenshots` artifact. |

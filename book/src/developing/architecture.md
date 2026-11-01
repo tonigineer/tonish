@@ -19,7 +19,7 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 | Method | The engine asks |
 |---|---|
 | `surfaces` | Which surfaces does this monitor get? Asked when a monitor appears, and for every monitor again after `changed` returns `true`. |
-| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine draws it on the CPU or the GPU, see [Drawing](drawing.md#the-gpu). Asked when the compositor gives the surface a new size, and when `to_redraw` names it. |
+| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine draws it on the CPU or the GPU, see [Drawing](drawing.md#the-gpu). Asked when the compositor gives the surface a new size, when `to_redraw` names it, and once more for every surface when the GPU takes over. |
 | `to_redraw` | What should I draw again? Asked after every batch of events, so that anything the app handles can lead to a redraw. A surface named several times in one batch is drawn once. |
 | `watched` | Which files should I watch? Asked once at start. |
 | `changed` | This file changed: does that change your surfaces? `true` makes the engine destroy every surface and ask `surfaces` again. |
@@ -34,8 +34,9 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 - **SIGINT and SIGTERM**, through a signalfd. A signal is handled between events like any other input, so it never interrupts a frame halfway.
 - **The socket:** a client connects, sends a line, and gets the app's answer.
 - **inotify** on the folders of the watched files. Watching the folder rather than the file catches editors that save by renaming a new file over the old one.
+- **The GPU's thread**, through a channel: that it has started, or that it has failed. See [The GPU's thread](drawing.md#the-gpus-thread).
 
-Ending is the reverse. The loop stops after the event that asked for it, the surfaces are destroyed, the socket file is removed, and only then do the clients' connections close. A client that asked to quit keeps its connection until that point, so `tonish msg quit` returns only once tonish is gone.
+Ending is the reverse. The loop stops after the event that asked for it, the surfaces are destroyed, the GPU's thread ends, the socket file is removed, and only then do the clients' connections close. A client that asked to quit keeps its connection until that point, so `tonish msg quit` returns only once tonish is gone.
 
 ## The shell
 

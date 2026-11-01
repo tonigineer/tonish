@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::c_void;
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -25,7 +26,8 @@ const PLATFORM_WAYLAND: egl::Enum = 0x31D8;
 
 type Lib = egl::DynamicInstance<egl::EGL1_5>;
 
-/// Shared by [`Gles`] and every [`Window`], so that it outlives all of them.
+/// Shared by [`Gles`] and every [`EglWindow`], so that it outlives all of
+/// them.
 struct Display {
     lib: Lib,
     display: egl::Display,
@@ -41,8 +43,8 @@ impl Display {
         // SAFETY: libEGL is the system's EGL, which implements the API.
         let lib = unsafe { Lib::load_required() }.map_err(|e| format!("no libEGL: {e}"))?;
         // SAFETY: the pointer is the connection's live wl_display, and the
-        // display is terminated in `Display::drop`, before the connection
-        // closes: the engine, which holds every `Rc`, is dropped first.
+        // display is terminated in `Display::drop`, on the GPU's thread,
+        // which keeps a clone of the connection open until it has ended.
         let display = unsafe {
             lib.get_platform_display(
                 PLATFORM_WAYLAND,
@@ -157,7 +159,6 @@ enum Command {
 pub(crate) struct Thread {
     commands: mpsc::Sender<Command>,
     thread: Option<JoinHandle<()>>,
-    /// The key for the next window.
     next: u64,
 }
 
@@ -167,7 +168,15 @@ impl Thread {
         let (commands, received) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("gpu".into())
-            .spawn(move || run(&conn, &received, &report))
+            .spawn(move || {
+                // Reported like any failure, or the panels on the GPU would
+                // stay as they are for good. The unwinding has dropped every
+                // window by the time it is caught.
+                let ran = panic::catch_unwind(AssertUnwindSafe(|| run(&conn, &received, &report)));
+                if ran.is_err() {
+                    let _ = report.send(Report::Failed("the GPU's thread panicked".into()));
+                }
+            })
             .map_err(|e| format!("no thread to start it on: {e}"))?;
         Ok(Self {
             commands,
@@ -178,9 +187,10 @@ impl Thread {
 
     /// The thread makes the window itself, at the surface's first frame.
     pub(crate) fn window(&mut self) -> Window {
+        let key = self.next;
         self.next += 1;
         Window {
-            key: self.next,
+            key,
             commands: self.commands.clone(),
         }
     }
@@ -262,7 +272,8 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
     }
 }
 
-/// Lives on the GPU's thread, where the context stays current.
+/// Never leaves the GPU's thread, the only one that makes the context
+/// current.
 struct Gles {
     display: Rc<Display>,
     gpu: Gpu,

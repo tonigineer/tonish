@@ -1,7 +1,7 @@
 //! Evaluates the signed distance at the pixels a shape may cover only
-//! partly, exactly as a GPU fragment shader would, so that its output stays
-//! a faithful reference for a future GPU backend and a fallback where there
-//! is no GPU. Where a shape says a stretch of a row is solid, or empty, the
+//! partly, exactly as the GPU's fragment shader does, so that its output is
+//! the reference the GPU is tested against, and the fallback where there is
+//! no GPU. Where a shape says a stretch of a row is solid, or empty, the
 //! answer is known without the distance. That saves nearly all the work,
 //! because a panel is almost all solid background. The tests compare every
 //! pixel with the plain evaluation of every pixel, so the stretches are

@@ -80,8 +80,9 @@ pub trait App {
     /// monitor without any.
     fn surfaces(&mut self, output: &Output) -> Vec<SurfaceSpec>;
 
-    /// Called when the compositor configures a surface with a new size, and
-    /// for every surface [`App::to_redraw`] names. The scene starts empty
+    /// Called when the compositor configures a surface with a new size, for
+    /// every surface [`App::to_redraw`] names, and for every surface once
+    /// more when the GPU takes over from the CPU. The scene starts empty
     /// each time, so `draw` paints the whole surface, not what changed.
     fn draw(&mut self, output: OutputId, surface: SurfaceId, paint: &mut Paint);
 

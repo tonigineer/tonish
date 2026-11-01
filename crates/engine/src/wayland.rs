@@ -226,8 +226,8 @@ struct Engine {
     qh: QueueHandle<Engine>,
     /// For EGL, which works on the connection's wl_display.
     conn: Connection,
-    /// For the source that hears when the GPU has started, added only once
-    /// the GPU is needed.
+    /// For the source that hears from the GPU's thread, added only when the
+    /// thread starts.
     handle: LoopHandle<'static, Engine>,
     outs: Vec<Out>,
     app: Box<dyn App>,
