@@ -22,7 +22,9 @@ const TEXT: f32 = 12.0;
 pub const FPS: f32 = 2.0;
 
 pub struct Hud {
-    pub shown: bool,
+    /// What `tonish msg hud` last asked for, which goes over the settings'
+    /// `hud.show` on every monitor until a save changes that.
+    pub toggled: Option<bool>,
     font: Option<Font>,
     /// Asked for once, so that a system without a font warns once.
     looked_for_font: bool,
@@ -43,7 +45,7 @@ struct Cpu {
 impl Default for Hud {
     fn default() -> Self {
         Self {
-            shown: true,
+            toggled: None,
             font: None,
             looked_for_font: false,
             frames: VecDeque::new(),

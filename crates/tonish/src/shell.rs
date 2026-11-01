@@ -228,15 +228,16 @@ impl Shell {
     /// The figures come after a monitor's panels in its list of surfaces.
     fn is_hud(&self, on: On) -> bool {
         match on {
-            On::Surface(out, SurfaceId(si)) => {
-                self.hud.shown
-                    && self
-                        .monitors
-                        .get(&out)
-                        .is_some_and(|m| si == m.screen.panels.len())
-            }
+            On::Surface(out, SurfaceId(si)) => self
+                .monitors
+                .get(&out)
+                .is_some_and(|m| self.hud_shown(m) && si == m.screen.panels.len()),
             On::Popup => false,
         }
+    }
+
+    fn hud_shown(&self, monitor: &Monitor) -> bool {
+        self.hud.toggled.unwrap_or(monitor.config.hud.show)
     }
 
     /// Folds the settings back into the bar. They let clicks and the
@@ -495,9 +496,11 @@ impl App for Shell {
             };
             self.monitors.insert(out.id, monitor);
         }
-        let screen = &self.monitors[&out.id].screen;
-        let mut surfaces: Vec<_> = screen.panels.iter().map(|p| p.surface(out.size)).collect();
-        if self.hud.shown {
+        let monitor = &self.monitors[&out.id];
+        let mut surfaces: Vec<_> = (monitor.screen.panels.iter())
+            .map(|p| p.surface(out.size))
+            .collect();
+        if self.hud_shown(monitor) {
             surfaces.push(Hud::surface());
         }
         surfaces
@@ -550,6 +553,12 @@ impl App for Shell {
             return false;
         }
         info!(file = %path.display(), "settings changed");
+        if configs
+            .iter()
+            .any(|(id, c)| self.monitors[id].config.hud != c.hud)
+        {
+            self.hud.toggled = None;
+        }
         for (id, config) in configs {
             if let Some(m) = self.monitors.get_mut(&id) {
                 m.config = config;
@@ -702,10 +711,13 @@ impl App for Shell {
                 }
             }
             Some(Message::Hud) => {
-                self.hud.shown = !self.hud.shown;
+                // Shown on any monitor counts as shown, so that the first
+                // toggle hides them everywhere.
+                let show = !self.monitors.values().any(|m| self.hud_shown(m));
+                self.hud.toggled = Some(show);
                 self.reshape = true;
                 Reply {
-                    text: if self.hud.shown { "shown" } else { "hidden" }.into(),
+                    text: if show { "shown" } else { "hidden" }.into(),
                     quit: false,
                 }
             }
@@ -1205,6 +1217,41 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(!reshape);
         assert_eq!(dp1_bar(&shell).thickness, 44.0);
+    }
+
+    fn figures(shell: &mut Shell) -> bool {
+        shell.surfaces(&output(1, "DP-1")).len() == 2
+    }
+
+    #[test]
+    fn hud_show_false_leaves_out_the_figures() {
+        assert!(figures(&mut shell_on_dp1(SHIPPED)));
+        assert!(!figures(&mut shell_on_dp1(
+            "return { hud = { show = false } }"
+        )));
+    }
+
+    #[test]
+    fn msg_hud_goes_over_the_setting_until_a_save_changes_it() {
+        let path = settings("hud", "return { hud = { show = false } }");
+        let mut shell = shell_from(&path);
+        assert_eq!(shell.message("hud").text, "shown");
+        assert!(shell.to_reshape());
+        assert!(figures(&mut shell));
+        // A save of something else keeps the figures as the message left
+        // them.
+        std::fs::write(&path, "return { hud = { show = false }, border = 2 }").unwrap();
+        assert!(shell.changed(&path));
+        assert!(figures(&mut shell));
+        std::fs::write(&path, "return { hud = { show = true }, border = 2 }").unwrap();
+        assert!(shell.changed(&path));
+        assert_eq!(shell.message("hud").text, "hidden");
+        std::fs::write(&path, "return { hud = { show = false } }").unwrap();
+        assert!(shell.changed(&path));
+        std::fs::write(&path, "return { hud = { show = true } }").unwrap();
+        assert!(shell.changed(&path));
+        let _ = std::fs::remove_file(&path);
+        assert!(figures(&mut shell));
     }
 
     #[test]

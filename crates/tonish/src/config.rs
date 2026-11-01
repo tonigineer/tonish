@@ -50,6 +50,15 @@ pub struct Config {
     pub bar: Bar,
     pub panel: Panels,
     pub animation: Animation,
+    pub hud: Hud,
+}
+
+/// The figures in the top left corner. `tonish msg hud` overrides `show`
+/// until a save changes it.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hud {
+    pub show: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -423,6 +432,7 @@ mod tests {
                 inverse_radius: 14.0,
             },
             animation: Animation { max_fps: 0.0 },
+            hud: Hud { show: true },
         };
         assert_eq!(Config::default(), want);
     }
@@ -441,8 +451,12 @@ mod tests {
             keys.sort();
             keys
         };
-        assert_eq!(keys(&shipped), ["animation", "bar", "border", "panel"]);
+        assert_eq!(
+            keys(&shipped),
+            ["animation", "bar", "border", "hud", "panel"]
+        );
         assert_eq!(keys(&shipped.get("animation").unwrap()), ["max_fps"]);
+        assert_eq!(keys(&shipped.get("hud").unwrap()), ["show"]);
         let bar = [
             "gap",
             "inverse_radius",
@@ -621,6 +635,7 @@ mod tests {
             ),
             ("border = -1", "border -1 is negative"),
             ("animation = { max_fps = -30 }", "max_fps -30 is negative"),
+            ("hud = { show = 1 }", "hud.show"),
             ("panel = { gap = 4 }", "gap"),
         ] {
             let err = settings(&format!("return {{ {text} }}")).unwrap_err();

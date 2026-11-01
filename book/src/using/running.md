@@ -51,7 +51,7 @@ If the GPU can't be used, because there is no libEGL or the driver fails, at the
 |---|---|
 | `quit` | Closes all panels and ends tonish |
 | `redraw` | Draws every panel again. With `TONISH_LOG=engine=debug`, the log then shows how long each draw took. |
-| `hud` | Hides the [figures in the corner](#the-figures-in-the-corner), or shows them again, and prints `hidden` or `shown`. |
+| `hud` | Hides the [figures in the corner](#the-figures-in-the-corner) on every monitor, or shows them again if no monitor shows them, and prints `hidden` or `shown`. It goes over the setting `hud.show` until a save changes that setting. |
 
 With no tonish running, `tonish msg quit` says that nobody answers and exits with 1. An unknown message is a mistake on the command line: tonish lists the known ones and exits with 2.
 
@@ -65,7 +65,7 @@ echo quit | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/tonish-$WAYLAND_DISPLAY.sock"
 
 ## The figures in the corner
 
-In the top left corner of every monitor, below the bar, tonish shows how it runs, updated twice a second. They let clicks through to the windows under them, and `tonish msg hud` hides them. Here, on an NVIDIA RTX 4090 in a headless sway, partway through the settings panel opening:
+In the top left corner of every monitor, below the bar, tonish shows how it runs, updated twice a second. They let clicks through to the windows under them. The setting [`hud.show`](settings.md#the-settings) hides them for good, and `tonish msg hud` for now. Here, on an NVIDIA RTX 4090 in a headless sway, partway through the settings panel opening:
 
 ```text
 tonish 0.0.6

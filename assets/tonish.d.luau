@@ -33,6 +33,9 @@ export type Settings = {
     animation: {
         max_fps: number?,
     }?,
+    hud: {
+        show: boolean?,
+    }?,
 }
 
 declare monitor: {

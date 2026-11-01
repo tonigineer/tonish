@@ -81,7 +81,7 @@ One setting stands above the sections and applies to the whole shell:
 |---|---|---|
 | `border` | The width of the line around the bar and every panel, in pixels. `0` draws none. One width for all of them, so that the bar's line always runs on round the panels that open from it: no line runs between a panel and the bar, and the bar's line turns into the panel's where they meet, round its concave corners or at a sharp one. On a bar that curves out into its edge, the line keeps its width round the curve and runs out into the edge. | `0` |
 
-The rest come in three sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), and `animation` for how panels move.
+The rest come in four sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), `animation` for how panels move, and `hud` for the [figures in the corner](running.md#the-figures-in-the-corner).
 
 | `bar` | Values | Default |
 |---|---|---|
@@ -100,6 +100,10 @@ The rest come in three sections: `bar` for the bar along the edge of the monitor
 | `animation` | Values | Default |
 |---|---|---|
 | `max_fps` | The most frames a second an animation draws, such as the settings panel as it opens and closes, at least 0. `0` draws every frame the compositor offers, at the monitor's refresh rate. A lower number, such as `60` on a 165 Hz monitor, spares the GPU and the CPU, and the animation takes as long. | `0` |
+
+| `hud` | Values | Default |
+|---|---|---|
+| `show` | `true` shows the [figures in the corner](running.md#the-figures-in-the-corner) on the monitor, `false` hides them. `tonish msg hud` hides or shows them on every monitor until the next save that changes `show`. | `true` |
 
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 

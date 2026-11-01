@@ -82,6 +82,14 @@ local settings: Settings = {
         -- the GPU on a fast monitor. 0 draws every frame the monitor shows.
         max_fps = 0,
     },
+
+    -- Figures on how tonish runs, in the top left corner below the bar:
+    -- frames a second, how long a frame takes, CPU, memory and the GPU.
+    hud = {
+        -- false hides them. `tonish msg hud` hides or shows them until the
+        -- next save that changes this.
+        show = true,
+    },
 }
 
 return settings

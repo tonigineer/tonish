@@ -61,3 +61,13 @@ def test_the_figures_draw_a_few_times_a_second(desktop):
     # Two a second on each of the two monitors.
     drawn = desktop.draws("1") - before
     assert 4 <= drawn <= 12, f"{drawn} draws of the figures in 2 s"
+
+
+def test_hud_show_false_hides_the_figures_until_msg_hud(desktop):
+    desktop.wait_for_panels()
+    assert wait_for(lambda: covered(desktop))
+    desktop.settings.write_text("return { hud = { show = false } }\n")
+    assert wait_for(lambda: not covered(desktop)), desktop.at(*INSIDE)
+    sent = desktop.run_tonish("msg", "hud")
+    assert sent.stdout.strip() == "shown", sent.stdout + sent.stderr
+    assert wait_for(lambda: covered(desktop)), desktop.at(*INSIDE)
