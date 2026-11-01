@@ -4,9 +4,12 @@ desktop. It has two 3840×2160 monitors at scale 2, so that bugs with several
 monitors or with scaling show up.
 """
 
+import itertools
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -39,10 +42,82 @@ def wait_for(cond, seconds=3.0, step=0.02):
     return bool(cond())
 
 
+def u32(*values):
+    return struct.pack(f"<{len(values)}I", *values)
+
+
+def string(text):
+    raw = text.encode() + b"\0"
+    return u32(len(raw)) + raw + b"\0" * (-len(raw) % 4)
+
+
+class VirtualPointer:
+    """A pointer for the headless seat, which has no input devices and so
+    offers clients none: with it, tonish binds a pointer, and sway's
+    `seat - cursor` commands reach tonish. It speaks the Wayland wire
+    protocol itself, because no packaged tool makes just a pointer."""
+
+    MANAGER = "zwlr_virtual_pointer_manager_v1"
+
+    def __init__(self, env):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(str(Path(env["XDG_RUNTIME_DIR"]) / env["WAYLAND_DISPLAY"]))
+        self.ids = itertools.count(2)
+        self.data = b""
+        registry = next(self.ids)
+        self.request(1, 1, u32(registry))  # wl_display.get_registry
+        names = {}
+        for sender, opcode, body in self.roundtrip():
+            if sender == registry and opcode == 0:  # wl_registry.global
+                name, length = struct.unpack_from("<2I", body)
+                names[body[8 : 8 + length - 1].decode()] = name
+        manager = next(self.ids)
+        # wl_registry.bind: a new_id without an interface of its own carries
+        # the interface's name and version before the id.
+        bind = u32(names[self.MANAGER]) + string(self.MANAGER) + u32(1, manager)
+        self.request(registry, 0, bind)
+        self.request(manager, 0, u32(0, next(self.ids)))  # for the default seat
+        list(self.roundtrip())
+
+    def request(self, sender, opcode, body):
+        self.sock.sendall(u32(sender, (8 + len(body)) << 16 | opcode) + body)
+
+    def read(self):
+        while True:
+            if len(self.data) >= 8:
+                sender, word = struct.unpack_from("<2I", self.data)
+                size = word >> 16
+                if len(self.data) >= size:
+                    body, self.data = self.data[8:size], self.data[size:]
+                    return sender, word & 0xFFFF, body
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("sway closed the connection")
+            self.data += chunk
+
+    def roundtrip(self):
+        """The events up to the point where sway has handled every request
+        sent so far."""
+        done = next(self.ids)
+        self.request(1, 0, u32(done))  # wl_display.sync
+        while True:
+            sender, opcode, body = self.read()
+            if sender == 1 and opcode == 0:  # wl_display.error
+                length = struct.unpack_from("<I", body, 8)[0]
+                raise RuntimeError(body[12 : 12 + length - 1].decode())
+            if sender == done:
+                return
+            yield sender, opcode, body
+
+    def close(self):
+        self.sock.close()
+
+
 class Desktop:
     def __init__(self, *args):
         """`args` go to tonish, such as `--disable-gpu`."""
         self.dir = Path(tempfile.mkdtemp(prefix="tonish-test-"))
+        self.pointer = None
         home, run = self.dir / "home", self.dir / "run"
         (home / ".config").mkdir(parents=True)
         run.mkdir(mode=0o700)
@@ -157,6 +232,25 @@ class Desktop:
     def draws(self):
         return self.logged().count("drew monitor=")
 
+    def swaymsg(self, *args):
+        subprocess.run(
+            ["swaymsg", *args], env=self.env, capture_output=True, check=True
+        )
+
+    def click(self, x, y, button):
+        """At `x`, `y` in the layout's logical pixels, with a button as Linux
+        names it, such as BTN_RIGHT."""
+        if self.pointer is None:
+            self.pointer = VirtualPointer(self.env)
+            assert wait_for(lambda: "pointer added" in self.logged()), self.logged()
+        self.swaymsg("seat", "-", "cursor", "set", str(x), str(y))
+        self.swaymsg("seat", "-", "cursor", "press", button)
+        self.swaymsg("seat", "-", "cursor", "release", button)
+
+    def key(self, name):
+        """A key by its xkb name, such as Escape, typed with wtype."""
+        subprocess.run(["wtype", "-k", name], env=self.env, check=True)
+
     def wait_for_gpu(self):
         """Until the GPU has taken over the panels of both monitors, which
         it does with a draw of each."""
@@ -176,6 +270,8 @@ class Desktop:
         return (self.dir / "tonish.log").read_text()
 
     def close(self):
+        if self.pointer is not None:
+            self.pointer.close()
         for p in (getattr(self, "tonish", None), self.sway):
             if p is not None and p.poll() is None:
                 p.terminate()

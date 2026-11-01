@@ -110,9 +110,10 @@ jobs:
       options: --shm-size=1g
     steps:
       # Mesa by name, because its software renderer stands in for the GPU
-      # in the GPU tests, and sway only asks for some OpenGL driver.
-      - name: Install sway, grim, Mesa, Python and uv
-        run: pacman -Syu --noconfirm --needed sway grim mesa python uv > /dev/null
+      # in the GPU tests, and sway only asks for some OpenGL driver. wtype
+      # types the keys of the tests that would otherwise be skipped.
+      - name: Install sway, grim, Mesa, wtype, Python and uv
+        run: pacman -Syu --noconfirm --needed sway grim mesa wtype python uv > /dev/null
 
       # sway carries cap_sys_nice; a container may not run a binary with a
       # capability.

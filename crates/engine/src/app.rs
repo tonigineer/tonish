@@ -59,6 +59,43 @@ pub struct SurfaceSpec {
     pub margin: (i32, i32, i32, i32),
 }
 
+/// One of the app's surfaces, for the events that happen on it and for
+/// [`Redraw`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum On {
+    Surface(OutputId, SurfaceId),
+    Popup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Left,
+    Right,
+    Middle,
+    /// The evdev code, as wl_pointer sends it.
+    Other(u32),
+}
+
+/// Keys arrive as evdev codes, without a keyboard layout, so that the engine
+/// needs no xkbcommon. That covers the keys that are in the same place on
+/// every layout, and only those are named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Escape,
+}
+
+/// The compositor places the popup, and moves it to keep it on the monitor,
+/// so it may not end up exactly where it was asked to be.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopupSpec {
+    /// The layer surface it hangs from.
+    pub parent: (OutputId, SurfaceId),
+    /// Logical pixels on the parent, where the popup's top-left corner goes.
+    pub at: (i32, i32),
+    /// Logical pixels.
+    pub size: (u32, u32),
+}
+
 /// Lends the engine's one scene, cleared before every draw, so that its
 /// allocation is reused across frames and surfaces instead of every draw
 /// allocating its own.
@@ -119,6 +156,30 @@ pub trait App {
         None
     }
 
+    /// A pointer button pressed on one of the app's surfaces, at `at` in
+    /// logical pixels on it.
+    fn pressed(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
+
+    /// Only a popup gets the keyboard, so keys arrive only while one is open.
+    fn key(&mut self, _key: Key) {}
+
+    /// Asked after every batch of events, like [`App::to_redraw`]. A popup
+    /// opens when the answer changes to `Some`, and closes when it is
+    /// `None`. One that opens in the batch of a button press gets the
+    /// compositor's grab, which gives it the keyboard and closes it on a
+    /// click outside every surface of the app. A click on another of the
+    /// app's surfaces arrives as [`App::pressed`] instead.
+    fn popup(&self) -> Option<PopupSpec> {
+        None
+    }
+
+    /// The compositor or the engine closed the popup. It does not open again
+    /// until [`App::popup`] answers something else.
+    fn popup_closed(&mut self) {}
+
+    /// [`App::draw`] for the popup.
+    fn draw_popup(&mut self, _paint: &mut Paint) {}
+
     /// One line from a client, already trimmed. The engine owns the socket
     /// and the app the meaning of the messages, so that the protocol can grow
     /// without touching Wayland code.
@@ -140,7 +201,7 @@ pub enum Redraw {
     /// Surfaces that are gone by the time the engine asks, or that the
     /// compositor has not configured yet, are skipped; a configure draws them
     /// anyway.
-    Surfaces(Vec<(OutputId, SurfaceId)>),
+    Surfaces(Vec<On>),
 }
 
 /// `quit` is part of the reply rather than a call the app makes, because the

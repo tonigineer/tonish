@@ -41,4 +41,4 @@ If tonish can't read `TONISH_LOG`, it logs a warning that names the mistake and 
 | `error` | Something tonish needs failed, and a panel is wrong or missing until it recovers. |
 | `warn` | Something is wrong, such as a broken settings file or a GPU that can't be used, and tonish works around it. |
 | `info` | Starting, settings, monitors, the socket, the GPU, shutting down. |
-| `debug` | Every event: each draw with its size, its time, whether the CPU or the GPU drew it, and for the GPU how long it waited for its turn; EGL starting, and each surface that moves to the GPU; messages and their answers; file changes. [Measuring](../developing/drawing.md#measuring) explains the draws' times. |
+| `debug` | Every event: each draw with its size, its time, whether the CPU or the GPU drew it, and for the GPU how long it waited for its turn; EGL starting, and each surface that moves to the GPU; button presses and keys, the pointer and keyboard as they appear, and the popup opening and closing; messages and their answers; file changes. [Measuring](../developing/drawing.md#measuring) explains the draws' times. |

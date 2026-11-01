@@ -25,6 +25,11 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 | `changed` | This file changed: does that change your surfaces? `true` makes the engine destroy every surface and ask `surfaces` again. |
 | `socket` | Where should I listen for messages? Asked first, because the socket also keeps a second instance from starting. |
 | `message` | A client sent this line: what's the answer, and should I quit? |
+| `pressed` | A pointer button was pressed on this surface or the popup, at this point in logical pixels. |
+| `key` | A key was pressed. Only the popup gets the keyboard, and only keys that are in the same place on every layout, such as Escape, are named, because the engine reads keys without a keyboard layout. |
+| `popup` | Should a popup be open, and where? Asked after every batch of events. A popup opens when the answer changes to one and closes when it is none. Opened for a button press, it gets the compositor's grab, which gives it the keyboard and closes it on a click outside every surface of tonish. |
+| `popup_closed` | The compositor or the engine closed the popup, such as for a click outside it, or because the surface it hangs from went away. |
+| `draw_popup` | What's on the popup? `draw` for the popup. |
 
 ## The event loop
 

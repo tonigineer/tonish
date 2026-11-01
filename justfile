@@ -64,7 +64,7 @@ test:
 [group("check")]
 check: lint test
 
-[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim, Mesa and uv.")]
+[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim, Mesa and uv, and wtype for the tests that type keys.")]
 [group("check")]
 [positional-arguments]
 desktop *args:

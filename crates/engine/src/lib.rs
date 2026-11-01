@@ -7,7 +7,10 @@ mod gles;
 mod socket;
 mod wayland;
 
-pub use app::{App, Layer, Output, OutputId, Paint, Redraw, Reply, SurfaceId, SurfaceSpec};
+pub use app::{
+    App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, SurfaceId,
+    SurfaceSpec,
+};
 // Re-exported, so that a shell builds its surfaces and scenes with exactly
 // the versions the engine was built against.
 pub use renderer;

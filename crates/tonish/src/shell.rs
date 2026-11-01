@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config};
 use crate::ipc::{self, Message};
+use crate::settings;
 use crate::theme::Theme;
-use engine::{self, App, Layer, Output, OutputId, Paint, Redraw, Reply, SurfaceId, SurfaceSpec};
+use engine::{
+    self, App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply,
+    SurfaceId, SurfaceSpec,
+};
 use renderer::{Circle, Point, Rect, Scene, Shape};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
@@ -26,6 +30,8 @@ pub struct Shell {
     file: Option<PathBuf>,
     monitors: HashMap<OutputId, Option<String>>,
     redraw: Redraw,
+    /// The settings panel, while it is open.
+    popup: Option<PopupSpec>,
 }
 
 pub struct Screen {
@@ -77,6 +83,7 @@ impl Shell {
             file: None,
             monitors: HashMap::new(),
             redraw: Redraw::Nothing,
+            popup: None,
         }
     }
 
@@ -267,6 +274,38 @@ impl App for Shell {
         std::mem::take(&mut self.redraw)
     }
 
+    /// Any other click on a panel closes the settings, as a click outside
+    /// them would: the compositor closes them on its own only for clicks
+    /// outside every surface of tonish.
+    fn pressed(&mut self, on: On, at: (f32, f32), button: Button) {
+        let On::Surface(output, surface) = on else {
+            return;
+        };
+        self.popup = (button == Button::Right).then_some(PopupSpec {
+            parent: (output, surface),
+            at: (at.0 as i32, at.1 as i32),
+            size: settings::SIZE,
+        });
+    }
+
+    fn key(&mut self, key: Key) {
+        if key == Key::Escape {
+            self.popup = None;
+        }
+    }
+
+    fn popup(&self) -> Option<PopupSpec> {
+        self.popup.clone()
+    }
+
+    fn popup_closed(&mut self) {
+        self.popup = None;
+    }
+
+    fn draw_popup(&mut self, paint: &mut Paint) {
+        settings::draw(paint.scene, paint.size, &self.theme);
+    }
+
     fn socket(&self) -> Option<PathBuf> {
         ipc::socket_from_env()
     }
@@ -303,6 +342,69 @@ mod tests {
             size: (1920.0, 1080.0),
             scale: 1,
         }
+    }
+
+    fn bar() -> On {
+        On::Surface(OutputId(1), SurfaceId(0))
+    }
+
+    #[test]
+    fn a_right_click_on_a_panel_opens_the_settings_there() {
+        let mut shell = Shell::default();
+        assert_eq!(shell.popup(), None);
+        shell.pressed(bar(), (120.5, 20.0), Button::Right);
+        let want = PopupSpec {
+            parent: (OutputId(1), SurfaceId(0)),
+            at: (120, 20),
+            size: settings::SIZE,
+        };
+        assert_eq!(shell.popup(), Some(want));
+    }
+
+    #[test]
+    fn another_click_on_a_panel_closes_the_settings() {
+        let mut shell = Shell::default();
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.pressed(bar(), (300.0, 20.0), Button::Left);
+        assert_eq!(shell.popup(), None);
+    }
+
+    #[test]
+    fn a_click_inside_the_settings_keeps_them_open() {
+        let mut shell = Shell::default();
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.pressed(On::Popup, (10.0, 10.0), Button::Left);
+        assert!(shell.popup().is_some());
+    }
+
+    #[test]
+    fn escape_closes_the_settings() {
+        let mut shell = Shell::default();
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.key(Key::Escape);
+        assert_eq!(shell.popup(), None);
+    }
+
+    #[test]
+    fn settings_the_compositor_closed_stay_closed() {
+        let mut shell = Shell::default();
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.popup_closed();
+        assert_eq!(shell.popup(), None);
+    }
+
+    #[test]
+    fn the_settings_cover_their_whole_surface() {
+        let mut shell = Shell::default();
+        let mut scene = Scene::new();
+        let mut paint = Paint {
+            scene: &mut scene,
+            size: (280.0, 180.0),
+            scale: 1.0,
+        };
+        shell.draw_popup(&mut paint);
+        let [p0, p1] = scene.shapes[0].bounds();
+        assert!(p0.x <= 0.0 && p0.y <= 0.0 && p1.x >= 280.0 && p1.y >= 180.0);
     }
 
     #[test]

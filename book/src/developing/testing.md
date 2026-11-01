@@ -21,6 +21,7 @@ Three kinds of tests deserve a mention:
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
 | `test_drawing.py` | `tonish msg redraw`, and how the bar looks |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
+| `test_settings_panel.py` | A right-click on the bar opens the settings panel at the pointer, and a left click on the bar, a click outside or Escape closes it |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
 - a fresh `HOME`, settings folder and runtime folder, so tests can't affect each other or your desktop;
@@ -32,7 +33,11 @@ The fixture is a `Desktop` from `harness.py`, with what tests need to look at to
 - `logged()` for tonish's log, which has the engine at debug level, and `draws()` for the draws in it;
 - `run_tonish(...)` for a second tonish, such as `tonish msg quit`;
 - `wait_for_panels()` to wait until tonish is ready for messages and edits;
-- `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels.
+- `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels;
+- `click(x, y, button)` to click in the layout's logical pixels, with a button as Linux names it, such as `BTN_RIGHT`;
+- `key(name)` to type a key, such as `Escape`, with wtype.
+
+The headless sway has no input devices, so it offers clients no pointer. The first `click` gives it one with a `VirtualPointer`, a Wayland client in the harness that speaks the wire protocol itself, and then clicks with sway's `seat - cursor` commands. Tests that type keys are skipped where wtype isn't installed.
 
 The module also has `wait_for`, which polls a condition for up to three seconds, and `near`, which compares colours with the tolerance that scaling needs.
 
@@ -69,4 +74,4 @@ A pull request into `main` runs these jobs. The others wait for "Version raised"
 | Version raised | The version is newer than on `main`, except for branches named `fix/*`. |
 | Lint | Formatting, clippy and ruff, and that the API documentation and this book build. |
 | Build | That `Cargo.lock` is up to date, the tests, then the release build, packaged as it would be released. |
-| Desktop | The general desktop tests, in an Arch Linux container with Mesa, with the packaged binary. When they fail, the screenshots are kept as the `desktop-screenshots` artifact. |
+| Desktop | The general desktop tests, in an Arch Linux container with Mesa and wtype, with the packaged binary. When they fail, the screenshots are kept as the `desktop-screenshots` artifact. |

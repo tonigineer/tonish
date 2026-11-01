@@ -19,6 +19,8 @@ use khronos_egl as egl;
 use renderer::Scene;
 use renderer::gpu::{Gpu, Unsupported};
 use tracing::{debug, info};
+
+use crate::wayland::Target;
 use wayland_client::{Connection, Proxy, protocol::wl_surface::WlSurface};
 
 /// From EGL_KHR_platform_wayland, which khronos-egl has no constant for.
@@ -137,7 +139,7 @@ pub(crate) struct Frame {
     pub(crate) scene: Scene,
     /// The rest is for the log.
     pub(crate) monitor: String,
-    pub(crate) index: usize,
+    pub(crate) target: Target,
     /// How long the engine took to build the scene, which the log counts
     /// with the drawing, as for a frame the CPU draws.
     pub(crate) built: Duration,
@@ -335,7 +337,7 @@ impl Gles {
                 }
                 debug!(
                     monitor = %frame.monitor,
-                    surface = frame.index,
+                    surface = %frame.target,
                     took = ?started.elapsed(),
                     "moved to the GPU"
                 );
@@ -346,7 +348,7 @@ impl Gles {
         let on = self.show(window, &frame)?;
         debug!(
             monitor = %frame.monitor,
-            surface = frame.index,
+            surface = %frame.target,
             size = ?frame.size,
             on = %on,
             took = ?(frame.built + started.elapsed()),

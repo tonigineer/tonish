@@ -15,6 +15,10 @@ To get the defaults back, delete the file; tonish writes it again on its next st
 
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 
+## The settings panel
+
+Right-click a panel to open the settings panel next to the pointer. Escape, a click outside it, or a left click on a panel closes it. It shows no settings yet; the file is still the place to change them.
+
 ## Changes apply when you save
 
 tonish watches the file and applies a change as soon as you save it, without a restart. Editors that save by writing a new file and renaming it over the old one work too. A save that changes nothing leaves the panels alone.
