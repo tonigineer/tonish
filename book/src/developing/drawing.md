@@ -9,7 +9,7 @@ A shape in tonish isn't a set of pixels or a path. It's a function that gives th
 
 The GPU's fragment shader works with the same number, so the CPU and the GPU draw the same scenes, see [The GPU](#the-gpu).
 
-The shapes so far are `Rect`, `RoundedRect`, with a radius of its own at each corner, and `Circle`; `Fillet`, a concave corner, which laid between two shapes of the same colour joins them in a curve; and `Outline`, which draws any shape as a band around its edge. Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
+The shapes so far are `Rect`, `RoundedRect`, with a radius of its own at each corner, and `Circle`; `Fillet`, a concave corner, which laid between two shapes of the same colour joins them in a curve; `Liquid`, a rounded box melted into an edge, straight or with waves on it, as the settings panel into the bar; `Text`, a line of text; and `Outline`, which draws any shape as a band around its edge. Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
 
 | Method | What it gives |
 |---|---|
@@ -38,7 +38,15 @@ The solid and empty stretches must not change a single byte of the result. [The 
 
 `gpu::Gpu` in the renderer draws a scene with OpenGL ES 3.0, in one draw call. Every shape becomes an instance of a quad over its box. The fragment shader, `gpu/shape.frag`, computes the distance at each pixel's centre and turns it into coverage exactly as the CPU rasteriser does.
 
-A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with a radius at each corner, which with every radius at half its size is a circle, with a circle cut out of it or not, which is how a `Fillet` gets its curve, and folded into an outline or not. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
+A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with a radius at each corner, which with every radius at half its size is a circle, melted into an edge or not, which is how a `Liquid` gets its shape, with a circle cut out of it or not, which is how a `Fillet` gets its curve, and folded into an outline or not.
+
+A `Liquid` joins its box and its edge with hg_sdf's round union, `max(r, min(a, b)) − |max((r − a, r − b), 0)|`, rather than a smooth minimum. Where the two meet at a right angle, as a panel's side meets the bar, it is the exact distance to concave corners of radius `r`, so the shape shrunk by a border's width, with `r` grown by it, is the inside of that border, and a border keeps its width round the corners. A smooth minimum would thicken it there by up to √2. The bar's side of the edge is a half-plane, so a `Liquid` is clipped to its bounds.
+
+The edge can carry a `Wave`: groups of crests that run apart from a point, as on water after a drop falls in, with the crests running at twice the speed of their group, so that each rises at the back of its group and fades at its front. Its distance is the height over the edge divided by the length of the slope's normal, exact on a straight edge and close enough near a crest for antialiasing and a border. Crests only rise out of the edge, never into it, because the panel is drawn over the bar and can't take from it. The shader reduces the crests' phase to one wavelength before its sine and cosine, as `Wave` does, because NVIDIA's lose precision far from 0.
+
+## Text
+
+`Font` in `crates/renderer/src/text.rs` sets a line of text with fontdue: each character is its font's glyph, at its advance, without shaping, which is right for the figures and labels a panel shows. It rasterises each glyph once per size, on whole physical pixels, and makes a `Text` of the coverage. A `Text`'s `distance` is not a distance: it is the value that makes the rasteriser's coverage of each pixel the glyph's own, `(0.5 − coverage) / scale`, so the CPU draws text exactly as the font made it, without a second way of drawing. The shader has no glyphs, so a frame with text goes to the CPU even on the GPU. That suits a small surface such as the figures in the corner, not a large one that animates, which will need glyphs on the GPU. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
 
 A scene with a shape that has no `sdf`, such as an outline of an outline, is drawn by the CPU rasteriser, and the GPU shows the result as a texture. The surface stays with EGL even then: a compositor with explicit sync, such as Hyprland with NVIDIA's driver, ends the connection when a surface that EGL has drawn into gets a shared-memory buffer.
 

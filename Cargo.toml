@@ -14,6 +14,9 @@ clap = { version = "4.6", features = ["derive"] }
 criterion = { version = "0.8.2", default-features = false, features = [
     "cargo_bench_support",
 ] }
+# Pure Rust, without FreeType, and enough for text without shaping: the
+# figures and labels a panel shows.
+fontdue = "0.9"
 glow = "0.17"
 inotify = "0.11"
 mlua = { version = "0.12", features = ["luau", "serialize"] }

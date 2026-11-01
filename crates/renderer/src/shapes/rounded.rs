@@ -22,6 +22,37 @@ impl RoundedRect {
     }
 }
 
+/// The points `depth` inside a box, by its centre and half size, form the
+/// box shrunk by `depth`, with its corners rounded by what is left of their
+/// radii: the corners' arcs keep their centres, and past a radius the corner
+/// is square. Each end of a row follows the corner of its half. Shared with
+/// [`Liquid`](super::Liquid).
+pub(super) fn inside_box(
+    c: Point,
+    h: Point,
+    radii: [f32; 4],
+    y: f32,
+    depth: f32,
+) -> Option<[f32; 2]> {
+    let (hx, hy, dy) = (h.x - depth, h.y - depth, y - c.y);
+    if dy.abs() > hy || hx < 0.0 {
+        return None;
+    }
+    let reach = |radius: f32| {
+        let r = (radius - depth).max(0.0);
+        let straight = hy - r;
+        if dy.abs() <= straight {
+            hx
+        } else {
+            let ey = dy.abs() - straight;
+            hx - r + (r * r - ey * ey).max(0.0).sqrt()
+        }
+    };
+    let [tl, tr, br, bl] = radii;
+    let (left, right) = if dy > 0.0 { (bl, br) } else { (tl, tr) };
+    Some([c.x - reach(left), c.x + reach(right)])
+}
+
 impl Shape for RoundedRect {
     fn bounds(&self) -> [Point; 2] {
         [self.p0, self.p1]
@@ -36,29 +67,9 @@ impl Shape for RoundedRect {
         rounded_box(c, h, self.radii, p)
     }
 
-    /// The points `depth` inside form the rectangle shrunk by `depth`, with
-    /// its corners rounded by what is left of their radii: the corners' arcs
-    /// keep their centres, and past a radius the corner is square. Each end
-    /// of a row follows the corner of its half.
     fn inside(&self, y: f32, depth: f32) -> Option<[f32; 2]> {
         let (c, h) = self.center_half();
-        let (hx, hy, dy) = (h.x - depth, h.y - depth, y - c.y);
-        if dy.abs() > hy || hx < 0.0 {
-            return None;
-        }
-        let reach = |radius: f32| {
-            let r = (radius - depth).max(0.0);
-            let straight = hy - r;
-            if dy.abs() <= straight {
-                hx
-            } else {
-                let ey = dy.abs() - straight;
-                hx - r + (r * r - ey * ey).max(0.0).sqrt()
-            }
-        };
-        let [tl, tr, br, bl] = self.radii;
-        let (left, right) = if dy > 0.0 { (bl, br) } else { (tl, tr) };
-        Some([c.x - reach(left), c.x + reach(right)])
+        inside_box(c, h, self.radii, y, depth)
     }
 
     fn sdf(&self) -> Option<Sdf> {
