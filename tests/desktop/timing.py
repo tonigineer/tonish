@@ -15,7 +15,9 @@ from pathlib import Path
 
 from harness import Desktop, wait_for
 
-DREW = re.compile(r"drew monitor=\S+ .*? on=(\w+) took=(\S+) waited=(\S+)")
+# The bars' draws only: the figures in the corner draw on their own, a few
+# times a second, and their text on the CPU.
+DREW = re.compile(r"drew monitor=\S+ surface=0 .*? on=(\w+) took=(\S+) waited=(\S+)")
 MS = {"ns": 1e-6, "µs": 1e-3, "ms": 1.0, "s": 1e3}
 
 

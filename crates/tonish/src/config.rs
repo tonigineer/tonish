@@ -49,6 +49,16 @@ pub struct Config {
     pub border: f32,
     pub bar: Bar,
     pub panel: Panels,
+    pub animation: Animation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Animation {
+    /// 0 draws every frame the compositor offers, at the monitor's refresh
+    /// rate.
+    #[serde(deserialize_with = "max_fps")]
+    pub max_fps: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -355,6 +365,10 @@ fn orientation<'de, D: Deserializer<'de>>(d: D) -> Result<Orientation, D::Error>
     })
 }
 
+fn max_fps<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("max_fps", f32::deserialize(d)?)
+}
+
 fn gap<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
     not_negative("gap", f32::deserialize(d)?)
 }
@@ -408,6 +422,7 @@ mod tests {
                 radius: [14.0; 4],
                 inverse_radius: 14.0,
             },
+            animation: Animation { max_fps: 0.0 },
         };
         assert_eq!(Config::default(), want);
     }
@@ -426,7 +441,8 @@ mod tests {
             keys.sort();
             keys
         };
-        assert_eq!(keys(&shipped), ["bar", "border", "panel"]);
+        assert_eq!(keys(&shipped), ["animation", "bar", "border", "panel"]);
+        assert_eq!(keys(&shipped.get("animation").unwrap()), ["max_fps"]);
         let bar = [
             "gap",
             "inverse_radius",
@@ -604,6 +620,7 @@ mod tests {
                 "inverse_radius -3 is negative",
             ),
             ("border = -1", "border -1 is negative"),
+            ("animation = { max_fps = -30 }", "max_fps -30 is negative"),
             ("panel = { gap = 4 }", "gap"),
         ] {
             let err = settings(&format!("return {{ {text} }}")).unwrap_err();

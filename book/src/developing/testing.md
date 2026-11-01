@@ -19,9 +19,10 @@ Three kinds of tests deserve a mention:
 | `test_startup.py` | Room on every monitor, the first start, the log, one tonish per session |
 | `test_settings.py` | Editing the settings, broken edits, and the room a panel keeps with a gap or a shorter length |
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
-| `test_drawing.py` | `tonish msg redraw`, and how the bar looks: its logo, its rounded corners, and the concave corners of a shorter bar |
+| `test_drawing.py` | `tonish msg redraw`, `--draw-always`, and how the bar looks: its logo, its rounded corners, and the concave corners of a shorter bar |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
-| `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer, and a left click on the bar, a click outside or Escape closes it |
+| `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer; it animates as it opens and then stops drawing, `max_fps` caps its frames, and a left click on the bar, a click outside or Escape folds it back |
+| `test_hud.py` | The figures in the corner show text without taking room from windows, `tonish msg hud` hides and shows them, and they draw a few times a second |
 | `test_timing.py` | How long drawing takes on this machine's GPU: warm and cold redraws, and resizes, each within a budget |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
@@ -31,7 +32,8 @@ A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its 
 The fixture is a `Desktop` from `harness.py`, with what tests need to look at tonish:
 - `workspaces()` for the room left to windows;
 - `at(x, y)` for a pixel;
-- `logged()` for tonish's log, which has the engine at debug level, and `draws()` for the draws in it;
+- `logged()` for tonish's log, which has the engine at debug level, and `draws()` for the draws in it, of every surface or of one, such as `draws("0")` for the bar;
+- `hide_hud()` to hide the figures in the corner, which change with every run, for a test of how panels look;
 - `run_tonish(...)` for a second tonish, such as `tonish msg quit`;
 - `wait_for_panels()` to wait until tonish is ready for messages and edits;
 - `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels;

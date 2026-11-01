@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::config::{self, Config};
 use crate::hang::{self, Edges};
+use crate::hud::{self, Hud};
 use crate::ipc::{self, Message};
+use crate::motion::Spring;
 use crate::settings;
 use crate::theme::Theme;
 use engine::{
-    self, App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
-    SurfaceId, SurfaceSpec,
+    self, App, Button, Drawn, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply,
+    Side, SurfaceId, SurfaceSpec,
 };
 use renderer::{Circle, Point, Scene, Shape};
 use serde::Deserialize;
@@ -30,8 +33,40 @@ pub struct Shell {
     /// Every monitor the engine has asked about.
     monitors: HashMap<OutputId, Monitor>,
     redraw: Redraw,
-    /// The settings panel, while it is open.
-    popup: Option<PopupSpec>,
+    /// The settings panel, from when it opens until it has folded back.
+    popup: Option<Popup>,
+    hud: Hud,
+    /// The surfaces changed other than through the settings, as when the
+    /// figures were hidden, and the engine has yet to ask for them.
+    reshape: bool,
+}
+
+/// The spring's settings are pleama-rs's: opening overshoots by about 5 %
+/// and first reaches its size after about 0.2 s, closing reaches 99 % in
+/// about 0.3 s without passing 0.
+struct Popup {
+    spec: PopupSpec,
+    side: Side,
+    /// 0 shut, 1 open.
+    grow: Spring,
+    /// Seconds since the card was all but back in the bar, and left waves
+    /// on its edge: a clock rather than a spring, since the waves run at a
+    /// steady speed.
+    ripple: Option<f32>,
+    /// When its last frame was drawn, which the next one steps the spring
+    /// from. `None` while it rests, so that a motion starting after a pause
+    /// starts with one frame's step rather than the whole pause.
+    drawn: Option<Instant>,
+}
+
+impl Popup {
+    fn closing(&self) -> bool {
+        !self.spec.grab
+    }
+
+    fn moving(&self) -> bool {
+        !self.grow.settled() || self.ripple.is_some_and(|t| t < settings::RIPPLE)
+    }
 }
 
 /// What the settings made of a monitor, kept to tell a save that changes
@@ -98,6 +133,8 @@ impl Shell {
             monitors: HashMap::new(),
             redraw: Redraw::Nothing,
             popup: None,
+            hud: Hud::default(),
+            reshape: false,
         }
     }
 
@@ -118,18 +155,16 @@ impl Shell {
         self.monitors.get(&id)
     }
 
-    /// Against the stretch across the panel at the pointer, on the side
-    /// away from the monitor's edge, so that the settings hang from the
-    /// panel rather than cover it. The card is centred on the pointer, but no
-    /// nearer the panel's ends than its straight inner edge allows, with room
-    /// for the concave corners: past that, they would curve out of nothing.
-    /// On a panel too short for that, the card starts at the panel's start,
-    /// since the anchor has to lie on the panel.
-    fn settings(&self, output: OutputId, surface: SurfaceId, at: (f32, f32)) -> Option<PopupSpec> {
+    /// Out of the panel's inner edge at the pointer, on the side away from
+    /// the monitor's edge, so that the settings hang from the panel rather
+    /// than cover it. The card is centred on the pointer, but no nearer the
+    /// panel's ends than its straight inner edge allows, with room for the
+    /// concave corners: past that, they would curve out of nothing. On a
+    /// panel too short for that, the card starts at the panel's start.
+    fn settings(&self, output: OutputId, surface: SurfaceId, at: (f32, f32)) -> Option<Popup> {
         let monitor = self.monitors.get(&output)?;
         let (out, config) = (&monitor.output, &monitor.config);
         let panel = monitor.screen.panels.get(surface.0)?;
-        let across = panel.thickness as i32;
         let side = match (panel.orientation, panel.anchor) {
             (Orientation::Horizontal, Anchor::Bottom) => Side::Above,
             (Orientation::Horizontal, _) => Side::Below,
@@ -157,21 +192,72 @@ impl Shell {
         );
         let start = pointer - card / 2.0;
         let start = if lo <= hi { start.clamp(lo, hi) } else { lo };
-        let along = (start - room).max(0.0) as i32;
-        let anchor = match panel.orientation {
-            Orientation::Horizontal => (along, 0, 1, across),
-            Orientation::Vertical => (0, along, across, 1),
-        };
+        let along = (start - room).max(0.0);
         // Over the bar's border, so that its line runs into the settings'
         // instead of beside it.
-        let overlap = panel.edges.border.ceil() as i32;
-        Some(PopupSpec {
-            parent: (output, surface),
-            anchor,
+        let overlap = panel.edges.border.ceil();
+        let size = settings::size(side, config, overlap);
+        let (x, y) = panel.origin(out.size);
+        let edge = panel.thickness - overlap;
+        let at = match side {
+            Side::Below => (x + along, y + edge),
+            Side::Right => (x + edge, y + along),
+            Side::Above => (x + along, y + overlap - size.1 as f32),
+            Side::Left => (x + overlap - size.0 as f32, y + along),
+        };
+        let [p0, p1] = settings::card(side, config, overlap);
+        let (x0, y0) = (p0.x.floor() as i32, p0.y.floor() as i32);
+        let input = (x0, y0, p1.x.ceil() as i32 - x0, p1.y.ceil() as i32 - y0);
+        let mut grow = Spring::new(0.0);
+        grow.aim(1.0, 260.0, 0.68);
+        Some(Popup {
+            spec: PopupSpec {
+                parent: (output, surface),
+                at: (at.0 as i32, at.1 as i32),
+                size,
+                grab: true,
+                input: Some(input),
+            },
             side,
-            gap: -overlap,
-            size: settings::size(side, config, overlap as f32),
+            grow,
+            drawn: None,
+            ripple: None,
         })
+    }
+
+    /// The figures come after a monitor's panels in its list of surfaces.
+    fn is_hud(&self, on: On) -> bool {
+        match on {
+            On::Surface(out, SurfaceId(si)) => {
+                self.hud.shown
+                    && self
+                        .monitors
+                        .get(&out)
+                        .is_some_and(|m| si == m.screen.panels.len())
+            }
+            On::Popup => false,
+        }
+    }
+
+    /// Folds the settings back into the bar. They let clicks and the
+    /// keyboard go at once, while they fold.
+    fn close(&mut self) {
+        let Some(p) = &mut self.popup else {
+            return;
+        };
+        if p.closing() {
+            return;
+        }
+        p.spec.grab = false;
+        p.spec.input = None;
+        p.grow.aim(0.0, 420.0, 1.0);
+        // Its first frame of folding back; the frames after it follow from
+        // `animating`.
+        match &mut self.redraw {
+            Redraw::Everything => {}
+            Redraw::Surfaces(on) => on.push(On::Popup),
+            nothing => *nothing = Redraw::Surfaces(vec![On::Popup]),
+        }
     }
 }
 
@@ -267,6 +353,30 @@ impl Panel {
         }
     }
 
+    /// Where the compositor puts the panel's surface on the monitor, as its
+    /// top-left corner: against its edge, past its gap, and centred along it
+    /// as wlroots centres a surface anchored to one edge, in whole pixels.
+    /// Another program's surface keeping room on the same edge would move
+    /// the panel without this knowing.
+    pub fn origin(&self, screen: (f32, f32)) -> (f32, f32) {
+        let (w, h) = self.size(screen);
+        let (w, h) = (w as u32 as i32, h as u32 as i32);
+        let (sw, sh) = (screen.0 as i32, screen.1 as i32);
+        let centre = |total: i32, length: i32| ((total - length) / 2) as f32;
+        let (x, y) = (centre(sw, w), centre(sh, h));
+        let g = self.gap;
+        match (self.anchor, self.spans()) {
+            (Anchor::Top, true) | (Anchor::Left, true) => (0.0, 0.0),
+            (Anchor::Top, false) => (x, g),
+            (Anchor::Bottom, true) => (0.0, (sh - h) as f32 - g),
+            (Anchor::Bottom, false) => (x, (sh - h) as f32 - g),
+            (Anchor::Left, false) => (g, y),
+            (Anchor::Right, true) => ((sw - w) as f32 - g, 0.0),
+            (Anchor::Right, false) => ((sw - w) as f32 - g, y),
+            (Anchor::Center, _) => (x, y),
+        }
+    }
+
     pub fn surface(&self, screen: (f32, f32)) -> SurfaceSpec {
         let (t, b, l, r) = (
             engine::Anchor::TOP,
@@ -308,6 +418,7 @@ impl Panel {
             size,
             exclusive,
             margin,
+            input: true,
         }
     }
 
@@ -385,16 +496,23 @@ impl App for Shell {
             self.monitors.insert(out.id, monitor);
         }
         let screen = &self.monitors[&out.id].screen;
-        screen.panels.iter().map(|p| p.surface(out.size)).collect()
+        let mut surfaces: Vec<_> = screen.panels.iter().map(|p| p.surface(out.size)).collect();
+        if self.hud.shown {
+            surfaces.push(Hud::surface());
+        }
+        surfaces
     }
 
     fn draw(&mut self, out: OutputId, surface: SurfaceId, paint: &mut Paint) {
-        let panel = self
-            .monitors
-            .get(&out)
-            .and_then(|m| m.screen.panels.get(surface.0));
-        if let Some(panel) = panel {
+        let Some(monitor) = self.monitors.get(&out) else {
+            return;
+        };
+        if let Some(panel) = monitor.screen.panels.get(surface.0) {
             panel.draw(paint.scene, paint.size, &self.theme);
+        } else if self.is_hud(On::Surface(out, surface)) {
+            let output = monitor.output.clone();
+            self.hud
+                .draw(paint.scene, &output, paint.scale, paint.time, &self.theme);
         }
     }
 
@@ -449,30 +567,28 @@ impl App for Shell {
     }
 
     /// Any other click on a panel closes the settings, as a click outside
-    /// them would: the compositor closes them on its own only for clicks
+    /// them would: the compositor ends their grab on its own only for clicks
     /// outside every surface of tonish.
     fn pressed(&mut self, on: On, at: (f32, f32), button: Button) {
         match on {
-            On::Surface(output, surface) => {
-                self.popup = match button {
-                    Button::Right => self.settings(output, surface, at),
-                    _ => None,
-                };
+            On::Surface(output, surface) if button == Button::Right => {
+                self.popup = self.settings(output, surface, at);
             }
+            On::Surface(..) => self.close(),
             // Hyprland sends a click outside the settings to them while they
             // hold the grab, with a point outside them. The room beside the
             // card, where only the concave corners are, counts as outside.
             On::Popup => {
-                let Some(spec) = &self.popup else {
+                let Some(p) = &self.popup else {
                     return;
                 };
-                let Some(m) = self.monitors.get(&spec.parent.0) else {
+                let Some(m) = self.monitors.get(&p.spec.parent.0) else {
                     return;
                 };
-                let overlap = -spec.gap as f32;
-                let [p0, p1] = settings::card(spec.side, &m.config, overlap);
+                let overlap = m.config.border.ceil();
+                let [p0, p1] = settings::card(p.side, &m.config, overlap);
                 if !(p0.x..p1.x).contains(&at.0) || !(p0.y..p1.y).contains(&at.1) {
-                    self.popup = None;
+                    self.close();
                 }
             }
         }
@@ -480,24 +596,91 @@ impl App for Shell {
 
     fn key(&mut self, key: Key) {
         if key == Key::Escape {
-            self.popup = None;
+            self.close();
         }
     }
 
     fn popup(&self) -> Option<PopupSpec> {
-        self.popup.clone()
+        self.popup.as_ref().map(|p| p.spec.clone())
+    }
+
+    fn popup_dismissed(&mut self) {
+        self.close();
     }
 
     fn popup_closed(&mut self) {
         self.popup = None;
     }
 
+    /// The figures are drawn again and again for as long as they show, at
+    /// their own few frames a second.
+    fn animating(&self, on: On) -> bool {
+        match on {
+            On::Popup => self.popup.as_ref().is_some_and(Popup::moving),
+            on => self.is_hud(on),
+        }
+    }
+
+    fn max_fps(&self, on: On) -> Option<f32> {
+        match on {
+            On::Popup => {
+                let parent = self.popup.as_ref()?.spec.parent.0;
+                let fps = self.monitors.get(&parent)?.config.animation.max_fps;
+                (fps > 0.0).then_some(fps)
+            }
+            on => self.is_hud(on).then_some(hud::FPS),
+        }
+    }
+
+    fn to_reshape(&mut self) -> bool {
+        std::mem::take(&mut self.reshape)
+    }
+
+    /// The figures' own frames aren't counted, or they would count
+    /// themselves.
+    fn drew(&mut self, on: On, drawn: Drawn) {
+        if !self.is_hud(on) {
+            self.hud.drew(on, drawn, Instant::now());
+        }
+    }
+
+    fn gpu_started(&mut self, device: &str) {
+        self.hud.gpu_started(device);
+    }
+
+    /// Steps the spring to the frame's time first, so that every frame
+    /// shows where the card is when it is drawn. Once it has folded back,
+    /// the settings are gone, and the engine destroys their surface.
     fn draw_popup(&mut self, paint: &mut Paint) {
-        if let Some(spec) = &self.popup
-            && let Some(m) = self.monitors.get(&spec.parent.0)
-        {
-            let overlap = -spec.gap as f32;
-            settings::draw(paint.scene, spec.side, &m.config, overlap, &self.theme);
+        let Some(p) = &mut self.popup else {
+            return;
+        };
+        let dt = p
+            .drawn
+            .map_or(1.0 / 60.0, |t| paint.time.duration_since(t).as_secs_f32());
+        p.grow.step(dt);
+        if let Some(t) = &mut p.ripple {
+            // Steps of at most 0.1 s, as the spring's, so that the waves
+            // resume rather than jump after a pause.
+            *t += dt.min(0.1);
+        } else if p.closing() && p.grow.value < 0.06 {
+            p.ripple = Some(0.0);
+        }
+        p.drawn = p.moving().then_some(paint.time);
+        if let Some(m) = self.monitors.get(&p.spec.parent.0) {
+            let overlap = m.config.border.ceil();
+            settings::draw(
+                paint.scene,
+                p.side,
+                &m.config,
+                overlap,
+                p.grow.value,
+                p.ripple,
+                &self.theme,
+            );
+        }
+        if p.closing() && !p.moving() {
+            self.popup = None;
         }
     }
 
@@ -515,6 +698,14 @@ impl App for Shell {
                 self.redraw = Redraw::Everything;
                 Reply {
                     text: "ok".into(),
+                    quit: false,
+                }
+            }
+            Some(Message::Hud) => {
+                self.hud.shown = !self.hud.shown;
+                self.reshape = true;
+                Reply {
+                    text: if self.hud.shown { "shown" } else { "hidden" }.into(),
                     quit: false,
                 }
             }
@@ -552,21 +743,53 @@ mod tests {
 
     const SHIPPED: &str = "return {}";
 
+    /// The settings' frames at 60 Hz for `seconds`, the last one left in the
+    /// returned scene.
+    fn play(shell: &mut Shell, seconds: f32) -> Scene {
+        let mut scene = Scene::new();
+        let start = Instant::now();
+        for i in 0..=(seconds * 60.0) as u32 {
+            let Some(spec) = shell.popup() else {
+                break;
+            };
+            scene.clear();
+            let mut paint = Paint {
+                scene: &mut scene,
+                size: (spec.size.0 as f32, spec.size.1 as f32),
+                scale: 1.0,
+                time: start + std::time::Duration::from_secs_f32(i as f32 / 60.0),
+            };
+            shell.draw_popup(&mut paint);
+        }
+        scene
+    }
+
+    fn folding(shell: &Shell) -> bool {
+        shell.popup().is_some_and(|p| !p.grab && p.input.is_none())
+    }
+
     #[test]
     fn a_right_click_on_a_bar_along_the_top_hangs_the_settings_below_it() {
         let mut shell = shell_on_dp1(SHIPPED);
         assert_eq!(shell.popup(), None);
         shell.pressed(bar(), (400.5, 20.0), Button::Right);
         // The card centred on the click, and the popup reaching the concave
-        // corners' room further.
-        let room = settings::room(Side::Below, &Config::default());
+        // corners' room further, below the bar along the monitor's top.
+        let config = Config::default();
+        let room = settings::room(Side::Below, &config);
         let start = 400.5 - settings::CARD.0 / 2.0 - room;
+        let size = settings::size(Side::Below, &config, 0.0);
         let want = PopupSpec {
             parent: (OutputId(1), SurfaceId(0)),
-            anchor: (start as i32, 0, 1, 44),
-            side: Side::Below,
-            gap: 0,
-            size: settings::size(Side::Below, &Config::default(), 0.0),
+            at: (start as i32, 44),
+            size,
+            grab: true,
+            input: Some((
+                room as i32,
+                0,
+                settings::CARD.0 as i32,
+                settings::CARD.1 as i32,
+            )),
         };
         assert_eq!(shell.popup(), Some(want));
     }
@@ -574,26 +797,26 @@ mod tests {
     #[test]
     fn a_right_click_on_a_bar_down_the_left_hangs_the_settings_right_of_it() {
         let mut shell =
-            shell_on_dp1(r#"return { bar = { orientation = "vertical", thickness = 30 } }"#);
+            shell_on_dp1("return { bar = { orientation = Orientation.Vertical, thickness = 30 } }");
         shell.pressed(bar(), (12.0, 300.0), Button::Right);
         let popup = shell.popup().unwrap();
         let room = settings::room(Side::Right, &Config::default());
         let start = (300.0 - settings::CARD.1 / 2.0 - room) as i32;
-        assert_eq!((popup.anchor, popup.side), ((0, start, 30, 1), Side::Right));
+        assert_eq!(popup.at, (30, start));
     }
 
     #[test]
     fn hanging_settings_cover_the_bars_border() {
         let mut shell = shell_on_dp1("return { border = 1.5 }");
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
-        assert_eq!(shell.popup().unwrap().gap, -2);
+        assert_eq!(shell.popup().unwrap().at.1, 44 - 2);
     }
 
     #[test]
     fn near_the_panels_start_the_settings_stay_on_it() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (5.0, 20.0), Button::Right);
-        assert_eq!(shell.popup().unwrap().anchor, (0, 0, 1, 44));
+        assert_eq!(shell.popup().unwrap().at, (0, 44));
     }
 
     /// On a bar 600 long, with its concave corners and rounded ends, and the
@@ -602,45 +825,57 @@ mod tests {
     fn near_a_shorter_bars_end_the_settings_stay_under_its_straight_edge() {
         let mut shell =
             shell_on_dp1("return { bar = { length = 600, radius = 12, inverse_radius = 20 } }");
-        // The bar's surface is 640 long: 20 of room at each end, then 12 of
-        // rounded corner, so its straight inner edge runs from 32 to 608.
+        // The bar's surface is 640 long, in the middle of the monitor from
+        // 640: 20 of room at each end, then 12 of rounded corner, so its
+        // straight inner edge runs from 32 to 608 on it.
         shell.pressed(bar(), (600.0, 20.0), Button::Right);
-        let start = shell.popup().unwrap().anchor.0 as f32 + 14.0;
+        let start = (shell.popup().unwrap().at.0 - 640) as f32 + 14.0;
         assert_eq!(start, 608.0 - 14.0 - settings::CARD.0);
         shell.pressed(bar(), (21.0, 20.0), Button::Right);
-        assert_eq!(shell.popup().unwrap().anchor.0, 32);
+        assert_eq!(shell.popup().unwrap().at.0 - 640, 32);
     }
 
     #[test]
     fn on_a_bar_too_short_for_them_the_settings_start_at_its_start() {
         let mut shell = shell_on_dp1("return { bar = { length = 200 } }");
         shell.pressed(bar(), (150.0, 20.0), Button::Right);
-        assert_eq!(shell.popup().unwrap().anchor.0, 0);
+        assert_eq!(shell.popup().unwrap().at.0, (1920 - 200) / 2);
     }
 
     #[test]
-    fn a_click_beside_the_card_closes_the_settings() {
+    fn a_bar_along_the_bottom_has_the_settings_above_it() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        let mut monitor = shell.monitors.remove(&OutputId(1)).unwrap();
+        monitor.screen.panels[0].anchor = Anchor::Bottom;
+        shell.monitors.insert(OutputId(1), monitor);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        let popup = shell.popup().unwrap();
+        assert_eq!(popup.at.1 + popup.size.1 as i32, 1080 - 44);
+    }
+
+    #[test]
+    fn a_click_beside_the_card_folds_the_settings_back() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         let room = settings::room(Side::Below, &Config::default());
         shell.pressed(On::Popup, (room / 2.0, 100.0), Button::Left);
-        assert_eq!(shell.popup(), None);
+        assert!(folding(&shell));
     }
 
     #[test]
-    fn a_click_outside_the_settings_that_reaches_them_closes_them() {
+    fn a_click_outside_the_settings_that_reaches_them_folds_them_back() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         shell.pressed(On::Popup, (-105.9, 17.2), Button::Right);
-        assert_eq!(shell.popup(), None);
+        assert!(folding(&shell));
     }
 
     #[test]
-    fn another_click_on_a_panel_closes_the_settings() {
+    fn another_click_on_a_panel_folds_the_settings_back() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         shell.pressed(bar(), (300.0, 20.0), Button::Left);
-        assert_eq!(shell.popup(), None);
+        assert!(folding(&shell));
     }
 
     #[test]
@@ -649,19 +884,70 @@ mod tests {
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         let room = settings::room(Side::Below, &Config::default());
         shell.pressed(On::Popup, (room + 10.0, 10.0), Button::Left);
-        assert!(shell.popup().is_some());
+        assert!(shell.popup().unwrap().grab);
     }
 
     #[test]
-    fn escape_closes_the_settings() {
+    fn escape_and_a_click_outside_tonish_fold_the_settings_back() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         shell.key(Key::Escape);
+        assert!(folding(&shell));
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        shell.popup_dismissed();
+        assert!(folding(&shell));
+    }
+
+    #[test]
+    fn folding_back_draws_its_first_frame_at_once() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        play(&mut shell, 1.0);
+        shell.key(Key::Escape);
+        assert_eq!(shell.to_redraw(), Redraw::Surfaces(vec![On::Popup]));
+    }
+
+    #[test]
+    fn folded_back_the_settings_are_gone() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        play(&mut shell, 1.0);
+        shell.key(Key::Escape);
+        play(&mut shell, 2.0);
         assert_eq!(shell.popup(), None);
     }
 
     #[test]
-    fn settings_the_compositor_closed_stay_closed() {
+    fn folding_back_leaves_ripples_before_the_settings_are_gone() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        play(&mut shell, 1.0);
+        shell.key(Key::Escape);
+        // Some 0.15 s after the card went in: the bar's edge rises in crests
+        // a pixel out of it, beside where the card was.
+        let scene = play(&mut shell, 0.35);
+        let edge = &scene.shapes[0];
+        let crests = (0..308)
+            .filter(|&x| edge.distance(Point::new(x as f32, 1.0)) < 0.0)
+            .count();
+        assert!(crests > 0 && crests < 308, "{crests} pixels a pixel out");
+        assert!(shell.popup().is_some());
+        play(&mut shell, 2.0);
+        assert_eq!(shell.popup(), None);
+    }
+
+    #[test]
+    fn the_settings_animate_only_while_they_move() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        assert!(shell.animating(On::Popup));
+        play(&mut shell, 1.0);
+        assert!(!shell.animating(On::Popup));
+        assert!(!shell.animating(bar()));
+    }
+
+    #[test]
+    fn settings_the_engine_closed_stay_closed() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
         shell.popup_closed();
@@ -669,20 +955,37 @@ mod tests {
     }
 
     #[test]
-    fn the_card_covers_its_part_of_the_settings() {
+    fn opened_the_card_fills_its_part_of_the_settings() {
         let mut shell = shell_on_dp1(SHIPPED);
         shell.pressed(bar(), (400.0, 20.0), Button::Right);
-        let mut scene = Scene::new();
-        let (w, h) = settings::size(Side::Below, &Config::default(), 0.0);
-        let mut paint = Paint {
-            scene: &mut scene,
-            size: (w as f32, h as f32),
-            scale: 1.0,
-        };
-        shell.draw_popup(&mut paint);
-        let [p0, p1] = scene.shapes[0].bounds();
+        let scene = play(&mut shell, 1.0);
         let [c0, c1] = settings::card(Side::Below, &Config::default(), 0.0);
-        assert!(p0.x <= c0.x && p0.y <= 0.0 && p1.x >= c1.x && p1.y >= h as f32);
+        let card = &scene.shapes[0];
+        let middle = Point::new((c0.x + c1.x) / 2.0, (c0.y + c1.y) / 2.0);
+        assert!(card.distance(middle) < 0.0);
+        assert!(card.distance(Point::new(middle.x, c1.y - 0.5)) < 0.0);
+        assert!(card.distance(Point::new(middle.x, c1.y + 0.5)) > 0.0);
+    }
+
+    #[test]
+    fn opening_the_card_starts_as_a_drop_narrower_than_it_is_deep() {
+        let mut shell = shell_on_dp1(SHIPPED);
+        shell.pressed(bar(), (400.0, 20.0), Button::Right);
+        // A few frames in, about a quarter of the way.
+        let scene = play(&mut shell, 0.05);
+        let [p0, p1] = scene.shapes[0].bounds();
+        let card = &scene.shapes[0];
+        let mid_x = (p0.x + p1.x) / 2.0;
+        let deep = (0..200)
+            .filter(|&y| card.distance(Point::new(mid_x, y as f32)) < 0.0)
+            .count();
+        let wide = (0..(p1.x as i32))
+            .filter(|&x| card.distance(Point::new(x as f32, 2.0)) < 0.0)
+            .count();
+        assert!(
+            deep > 0 && wide < settings::CARD.0 as usize,
+            "{deep} deep, {wide} wide"
+        );
     }
 
     /// The bar the settings `bar = { ... }` give a monitor 1920 wide.

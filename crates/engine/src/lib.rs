@@ -8,11 +8,11 @@ mod socket;
 mod wayland;
 
 pub use app::{
-    App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
+    App, Button, Drawn, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
     SurfaceId, SurfaceSpec,
 };
 // Re-exported, so that a shell builds its surfaces and scenes with exactly
 // the versions the engine was built against.
 pub use renderer;
 pub use smithay_client_toolkit::shell::wlr_layer::Anchor;
-pub use wayland::{Gpu, run};
+pub use wayland::{Gpu, Options, run};

@@ -20,6 +20,7 @@ use renderer::Scene;
 use renderer::gpu::{Gpu, Unsupported};
 use tracing::{debug, info};
 
+use crate::app::{Drawn, On};
 use crate::wayland::Target;
 use wayland_client::{Connection, Proxy, protocol::wl_surface::WlSurface};
 
@@ -123,8 +124,10 @@ impl Drop for Display {
 
 /// What the GPU's thread tells the engine.
 pub(crate) enum Report {
-    /// It takes frames from now on.
-    Started,
+    /// It takes frames from now on, on this device.
+    Started(String),
+    /// A frame is on the screen's way, for the app's statistics.
+    Drew(On, Drawn),
     /// It failed, to start or later, and has ended. Every window was gone
     /// before it said so, so the engine may destroy the surfaces.
     Failed(String),
@@ -140,6 +143,7 @@ pub(crate) struct Frame {
     /// The rest is for the log.
     pub(crate) monitor: String,
     pub(crate) target: Target,
+    pub(crate) on: On,
     /// How long the engine took to build the scene, which the log counts
     /// with the drawing, as for a frame the CPU draws.
     pub(crate) built: Duration,
@@ -258,7 +262,7 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
             return;
         }
     };
-    let _ = report.send(Report::Started);
+    let _ = report.send(Report::Started(gles.gpu.device()));
     let mut windows = HashMap::new();
     let mut frames: Vec<(u64, Frame)> = Vec::new();
     while let Ok(first) = commands.recv() {
@@ -284,10 +288,15 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
             }
         }
         for (key, frame) in frames.drain(..) {
-            if let Err(e) = gles.draw(&mut windows, key, frame) {
-                windows.clear();
-                let _ = report.send(Report::Failed(e));
-                return;
+            match gles.draw(&mut windows, key, frame) {
+                Ok((on, drawn)) => {
+                    let _ = report.send(Report::Drew(on, drawn));
+                }
+                Err(e) => {
+                    windows.clear();
+                    let _ = report.send(Report::Failed(e));
+                    return;
+                }
             }
         }
     }
@@ -339,7 +348,7 @@ impl Gles {
         windows: &mut HashMap<u64, EglWindow>,
         key: u64,
         frame: Frame,
-    ) -> Result<(), String> {
+    ) -> Result<(On, Drawn), String> {
         let waited = frame.sent.elapsed();
         let (window, fresh) = match windows.entry(key) {
             Entry::Occupied(window) => (window.into_mut(), false),
@@ -357,15 +366,21 @@ impl Gles {
         };
         let started = Instant::now();
         let on = self.show(window, &frame)?;
+        let took = frame.built + started.elapsed();
         debug!(
             monitor = %frame.monitor,
             surface = %frame.target,
             size = ?frame.size,
             on = %on,
-            took = ?(frame.built + started.elapsed()),
+            took = ?took,
             waited = ?waited,
             "drew"
         );
+        let drawn = Drawn {
+            took,
+            waited,
+            gpu: on == "gpu",
+        };
         // Twice more, back to back, so that EGL allocates the three buffers a
         // fast animation needs now, while the surface shows the same image,
         // rather than at an animation's first frames: each allocation stalls
@@ -377,7 +392,7 @@ impl Gles {
                 self.show(window, &frame)?;
             }
         }
-        Ok(())
+        Ok((frame.on, drawn))
     }
 
     /// Draws the frame and commits the surface, which the buffer swap

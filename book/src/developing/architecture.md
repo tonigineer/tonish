@@ -19,17 +19,25 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 | Method | The engine asks |
 |---|---|
 | `surfaces` | Which surfaces does this monitor get? Asked when a monitor appears, and for every monitor again after `changed` returns `true`. |
-| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine draws it on the CPU or the GPU, see [Drawing](drawing.md#the-gpu). Asked when the compositor gives the surface a new size, when `to_redraw` names it, and once more for every surface when the GPU takes over. |
+| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine draws it on the CPU or the GPU, see [Drawing](drawing.md#the-gpu). Asked when the compositor gives the surface a new size, when `to_redraw` names it, at every frame while it animates, and once more for every surface when the GPU takes over. `Paint::time` is when the engine started the frame, which animations step their springs to. |
+| `max_fps` | At most how many frames a second for this surface while it animates? A frame the compositor offers sooner is drawn when it is due, on a timer: skipping it would wait a whole refresh more. |
+| `animating` | Does this surface move? Asked after every draw. While it says yes, the engine asks the compositor for the surface's next frame with the commit that shows this one, and draws it again when the frame comes: the compositor sets the pace, and a surface it doesn't show gets no frames, so its animation waits. |
 | `to_redraw` | What should I draw again? Asked after every batch of events, so that anything the app handles can lead to a redraw. A surface named several times in one batch is drawn once. |
 | `watched` | Which files should I watch? Asked once at start. |
 | `changed` | This file changed: does that change your surfaces? `true` makes the engine ask `surfaces` again. A surface that keeps its name and layer changes in place, without a blink, and is drawn again at its new size; any other is replaced. A change that leaves every surface the same, such as the radius alone, still needs `to_redraw`. |
 | `socket` | Where should I listen for messages? Asked first, because the socket also keeps a second instance from starting. |
 | `message` | A client sent this line: what's the answer, and should I quit? |
 | `pressed` | A pointer button was pressed on this surface or the popup, at this point in logical pixels. |
-| `key` | A key was pressed. Only the popup gets the keyboard, and only keys that are in the same place on every layout, such as Escape, are named, because the engine reads keys without a keyboard layout. |
-| `popup` | Should a popup be open, and against which rectangle of which surface, on which side? Asked after every batch of events. A popup opens when the answer changes to one and closes when it is none. Opened for a button press, it gets the compositor's grab, which gives it the keyboard and closes it on a click outside every surface of tonish. |
-| `popup_closed` | The compositor or the engine closed the popup, such as for a click outside it, or because the surface it hangs from went away. |
+| `key` | A key was pressed. Only the popup's grab gets the keyboard, and only keys that are in the same place on every layout, such as Escape, are named, because the engine reads keys without a keyboard layout. |
+| `popup` | Should a popup be open, where on the monitor, how large, holding the grab or not, and which part of it takes the pointer? Asked after every batch of events. A popup opens when the answer changes to one, changes with it, and closes when it is none. |
+| `popup_dismissed` | A click outside every surface of tonish ended the popup's grab. The popup stays until `popup` answers none, so that it can animate away. |
+| `popup_closed` | The engine closed the popup, because its monitor went away. |
+| `to_reshape` | Should I ask for your surfaces again? Asked after every batch of events, so that a surface can come or go on a message, as the figures in the corner do on `tonish msg hud`. Unlike `changed`, it leaves an open popup open. |
+| `drew` | A frame was drawn, in this time, by the CPU or the GPU. A GPU frame is reported once the GPU's thread has drawn it. The shell counts these for its figures. |
+| `gpu_started` | The GPU took over, on this device. |
 | `draw_popup` | What's on the popup? `draw` for the popup. |
+
+A popup is an overlay layer surface of its own rather than an xdg_popup, because the compositor unmaps an xdg_popup the moment a click lands outside it, which leaves nothing to animate. It sits at a fixed place on the monitor, as large as everything it shows while it moves, since a surface resized in every frame flickers, and only its card takes the pointer. Opened for a button press, it also gets an invisible xdg_popup of one pixel on the bar, which holds the compositor's grab: that gives it the keyboard and tells it of a click outside. sway and Hyprland both keep that click from the window under it, and no other way tells a panel of the click while letting it through on both.
 
 ## The event loop
 

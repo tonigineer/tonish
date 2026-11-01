@@ -81,7 +81,7 @@ One setting stands above the sections and applies to the whole shell:
 |---|---|---|
 | `border` | The width of the line around the bar and every panel, in pixels. `0` draws none. One width for all of them, so that the bar's line always runs on round the panels that open from it: no line runs between a panel and the bar, and the bar's line turns into the panel's where they meet, round its concave corners or at a sharp one. On a bar that curves out into its edge, the line keeps its width round the curve and runs out into the edge. | `0` |
 
-The rest come in two sections: `bar` for the bar along the edge of the monitor, and `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel).
+The rest come in three sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), and `animation` for how panels move.
 
 | `bar` | Values | Default |
 |---|---|---|
@@ -97,11 +97,15 @@ The rest come in two sections: `bar` for the bar along the edge of the monitor, 
 | `radius` | How round a panel's corners away from the bar are, in pixels, as for the bar. The corners at the bar follow `inverse_radius` instead. | `14` |
 | `inverse_radius` | A panel is part of the bar it opens from, and curves out of it at its corners there with this radius, in pixels. `0` meets the bar in a sharp corner. | `14` |
 
+| `animation` | Values | Default |
+|---|---|---|
+| `max_fps` | The most frames a second an animation draws, such as the settings panel as it opens and closes, at least 0. `0` draws every frame the compositor offers, at the monitor's refresh rate. A lower number, such as `60` on a 165 Hz monitor, spares the GPU and the CPU, and the animation takes as long. | `0` |
+
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 
 ## The settings panel
 
-Right-click the bar to open the settings panel. It hangs from the bar's inner edge, centred where you clicked, though no nearer the bar's ends than its straight edge allows, below a bar along the top, to the right of one down the left, shaped by the `panel` settings. Escape, a click outside it, or a left click on the bar closes it. It shows no settings yet; the file is still the place to change them.
+Right-click the bar to open the settings panel. It grows out of the bar's inner edge like a drop, centred where you clicked, though no nearer the bar's ends than its straight edge allows, below a bar along the top, to the right of one down the left, shaped by the `panel` settings. Escape, a click outside it, or a left click on the bar folds it back into the bar, where it leaves waves on the bar's edge, as on water after a drop falls in: they run apart along the edge and die away within a second and a half. A click outside tonish only closes it and doesn't reach the window you clicked: sway and Hyprland keep it from the window while a panel is open. It shows no settings yet; the file is still the place to change them.
 
 ## Changes apply when you save
 
@@ -125,7 +129,7 @@ A monitor that appears while tonish runs, and that the file fails for, gets the 
 - **A setting outside its section**, such as `thickness` outside `bar`, is an error, which names the sections.
 - **A value of the wrong kind** is an error, such as `orientation = 2`, `thickness = "wide"`, or a `radius` with a corner `top`.
 - **A thickness under 1, or a length between 0 and 1,** is an error. The compositor would end tonish's connection for a bar 0 pixels thick or long.
-- **A negative gap, radius, inverse radius or border** is an error.
+- **A negative gap, radius, inverse radius, border or `max_fps`** is an error.
 
 At start, a broken file is an error that ends tonish: it prints what's wrong and exits with 1.
 

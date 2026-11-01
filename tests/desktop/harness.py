@@ -235,8 +235,18 @@ class Desktop:
         i = (y * w + x) * 3
         return tuple(px[i : i + 3])
 
-    def draws(self):
-        return self.logged().count("drew monitor=")
+    def draws(self, surface=None):
+        """Of every surface, or of one, such as "0" for the bar or "popup"."""
+        lines = [line for line in self.logged().splitlines() if "drew monitor=" in line]
+        if surface is not None:
+            lines = [line for line in lines if f" surface={surface} " in line]
+        return len(lines)
+
+    def hide_hud(self):
+        """The figures in the top left corner change with every run and cover
+        what is under them, which tests of how panels look must not see."""
+        sent = self.run_tonish("msg", "hud")
+        assert sent.stdout.strip() == "hidden", sent.stdout + sent.stderr
 
     def swaymsg(self, *args):
         subprocess.run(

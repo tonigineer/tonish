@@ -73,7 +73,7 @@ def test_an_edit_reshapes_the_panels_in_place(desktops, args):
     assert wait_for(lambda: d.workspaces() == top), d.workspaces()
     assert wait_for(lambda: d.logged().count("size=(3840, 120)") >= 2), d.logged()
     log = d.logged()
-    assert log.count("surface made") == 2, log
+    assert log.count("surface made name=panel") == 2, log
     assert log.count("surface reshaped") == 2, log
     # Only at the new size: drawn before the compositor sends it, the bar
     # would show cut to the old size for a frame.
@@ -81,6 +81,6 @@ def test_an_edit_reshapes_the_panels_in_place(desktops, args):
     sizes = [
         line.split("size=")[1].split(")")[0] + ")"
         for line in after.splitlines()
-        if "drew monitor=" in line
+        if "drew monitor=" in line and " surface=0 " in line
     ]
     assert sizes == ["(3840, 120)"] * 2, after

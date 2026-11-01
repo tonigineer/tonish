@@ -30,6 +30,9 @@ export type Settings = {
         radius: Radius?,
         inverse_radius: number?,
     }?,
+    animation: {
+        max_fps: number?,
+    }?,
 }
 
 declare monitor: {

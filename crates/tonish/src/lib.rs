@@ -6,8 +6,10 @@
 pub mod args;
 pub mod config;
 pub mod hang;
+pub mod hud;
 pub mod ipc;
 pub mod logging;
+pub mod motion;
 pub mod settings;
 pub mod shell;
 pub mod theme;

@@ -41,10 +41,13 @@ def test_the_panels_appear_before_the_gpu_has_started(desktop):
 
 def test_the_gpu_draws_the_panels_as_the_cpu_does(desktops):
     cpu = desktops("--disable-gpu")
+    drawn(cpu)
+    cpu.hide_hud()
     want = drawn(cpu)
     cpu.close()
     gpu = desktops()
     gpu.wait_for_gpu()
+    gpu.hide_hud()
     got = drawn(gpu)
     assert len(got) == len(want), "the screenshots differ in size"
     # Rounding in the blending, which the renderer's own test bounds by 2

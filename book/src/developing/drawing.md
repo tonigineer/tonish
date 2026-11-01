@@ -111,6 +111,8 @@ The benchmarks above stop before a frame is shown. `just bench-desktop` times th
 - **resizes**, the bar's thickness changed back and forth in its settings, for which EGL allocates the surface's buffers again;
 - **cold redraws**, each after ten seconds without one. With NVIDIA's driver, the first draw after that has taken 1 to 2 ms instead of 0.1, unless something else, such as a game, keeps the GPU busy.
 
+`tonish --draw-always` draws every panel again as soon as it has drawn it, without waiting for the compositor's next frame, so that the figures in the corner show the most frames a second tonish reaches, and each draw's time, in your own session. On an NVIDIA RTX 4090, in a headless sway with two monitors at scale 2 and the engine logging at debug level, a bar 3840 by 88 pixels reached about 3,000 frames a second on each monitor on the GPU, and about 3,350 on the CPU, which then kept 82 % of a core busy. The frame itself takes 0.12 to 0.15 ms either way; the rest is handing the frame to the compositor.
+
 A redraw counts with the slower of its two monitors' draws, and `waited` is the longest that a draw waited for the GPU's thread, busy with the other monitor. Arguments change how many of each it measures and how long it idles, such as `just bench-desktop --cold 5 --idle 20`. It needs sway and a GPU that sway can composite on, and passes sway `--unsupported-gpu` for NVIDIA's driver. The [timing tests](testing.md#desktop-tests) hold the same cases to a budget.
 
 ### In your session

@@ -1,6 +1,7 @@
 use renderer::Scene;
 use smithay_client_toolkit::shell::wlr_layer::Anchor;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// The wl_output's global name, so that a shell can key per-monitor state on
 /// it for as long as the monitor stays connected. A monitor plugged in again
@@ -57,6 +58,9 @@ pub struct SurfaceSpec {
     pub exclusive: i32,
     /// In the protocol's order: top, right, bottom, left.
     pub margin: (i32, i32, i32, i32),
+    /// `false` lets every click through to whatever is under the surface,
+    /// as for figures shown over windows.
+    pub input: bool,
 }
 
 /// One of the app's surfaces, for the events that happen on it and for
@@ -84,33 +88,51 @@ pub enum Key {
     Escape,
 }
 
-/// The compositor places the popup, and moves it to keep it on the monitor,
-/// so it may not end up exactly where it was asked to be.
+/// A layer surface of its own over the monitor rather than an xdg_popup,
+/// which the compositor unmaps the moment a click lands outside it, so that
+/// it can animate as it closes. The engine gives it an invisible xdg_popup
+/// for the compositor's grab. The app places it, so it ends up exactly where
+/// it was asked to be, even off the monitor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PopupSpec {
-    /// The layer surface it hangs from.
+    /// The surface whose button press opened it, which the grab hangs from.
     pub parent: (OutputId, SurfaceId),
-    /// Logical pixels on the parent, as x, y, width and height: the
-    /// rectangle the popup is put against, such as the stretch across a
-    /// panel at the pointer.
-    pub anchor: (i32, i32, i32, i32),
-    pub side: Side,
-    /// Logical pixels between the anchor and the popup. Negative overlaps
-    /// them.
-    pub gap: i32,
-    /// Logical pixels.
+    /// Logical pixels on the monitor, from its top left corner, regardless of
+    /// the room other surfaces keep.
+    pub at: (i32, i32),
+    /// Logical pixels: room for everything it shows while it moves, so that
+    /// it is never resized during an animation, which would make it flicker.
     pub size: (u32, u32),
+    /// While `true`, it holds the grab: it gets the keyboard, and a click
+    /// outside every surface of the app reaches [`App::popup_dismissed`]
+    /// instead of the window under it. A grab can only start in the batch of
+    /// a button press, so turning it on later does nothing.
+    pub grab: bool,
+    /// The part that takes the pointer, as x, y, width and height in logical
+    /// pixels on the popup. Clicks elsewhere go to whatever is under it.
+    pub input: Option<(i32, i32, i32, i32)>,
 }
 
-/// The side of the anchor the popup goes on, starting at its left or top
-/// end. Where there is no room, the compositor slides the popup along that
-/// side, or flips it to the opposite one.
+/// Where something is from what it opens out of: a panel below a bar along
+/// the top, to the right of one down the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Above,
     Below,
     Left,
     Right,
+}
+
+/// How a frame of a surface went, for an app that shows such figures.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drawn {
+    /// Building the scene and drawing it, up to handing it to the
+    /// compositor.
+    pub took: Duration,
+    /// How long it waited for the GPU's thread, busy with other frames.
+    pub waited: Duration,
+    /// Drawn by the GPU's shader, rather than by the CPU rasteriser.
+    pub gpu: bool,
 }
 
 /// Lends the engine's one scene, cleared before every draw, so that its
@@ -124,6 +146,10 @@ pub struct Paint<'a> {
     /// `f32`, although outputs only report whole scales so far, so that
     /// fractional scaling can come without changing every shell.
     pub scale: f32,
+    /// When the engine started drawing the frame, which animations step
+    /// their springs to. Passed in rather than read by the app, so that a
+    /// shell's animations can be tested at any time.
+    pub time: Instant,
 }
 
 /// Keeps the shell free of Wayland: it only says which surfaces it wants
@@ -178,22 +204,57 @@ pub trait App {
     /// logical pixels on it.
     fn pressed(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
 
-    /// Only a popup gets the keyboard, so keys arrive only while one is open.
+    /// Only a popup's grab gets the keyboard, so keys arrive only while one
+    /// holds it.
     fn key(&mut self, _key: Key) {}
 
     /// Asked after every batch of events, like [`App::to_redraw`]. A popup
-    /// opens when the answer changes to `Some`, and closes when it is
-    /// `None`. One that opens in the batch of a button press gets the
-    /// compositor's grab, which gives it the keyboard and closes it on a
-    /// click outside every surface of the app. A click on another of the
-    /// app's surfaces arrives as [`App::pressed`] instead.
+    /// opens when the answer changes to `Some`, changes with it, and closes
+    /// when it is `None`. A click on another of the app's surfaces while it
+    /// holds the grab arrives as [`App::pressed`].
     fn popup(&self) -> Option<PopupSpec> {
         None
     }
 
-    /// The compositor or the engine closed the popup. It does not open again
-    /// until [`App::popup`] answers something else.
+    /// A click outside every surface of the app ended the popup's grab. The
+    /// popup stays until [`App::popup`] answers `None`, so that it can
+    /// animate away.
+    fn popup_dismissed(&mut self) {}
+
+    /// The engine closed the popup, as when its monitor went away. It does
+    /// not open again until [`App::popup`] answers something else.
     fn popup_closed(&mut self) {}
+
+    /// Asked after every draw of a surface: whether it moves, so that the
+    /// engine draws it again when the compositor is ready for its next
+    /// frame. A surface the compositor doesn't show gets no frames, so its
+    /// animation waits until it is shown again.
+    fn animating(&self, _on: On) -> bool {
+        false
+    }
+
+    /// The most frames a second the surface is drawn while it animates.
+    /// `None` takes every frame the compositor offers, at the monitor's
+    /// refresh rate.
+    fn max_fps(&self, _on: On) -> Option<f32> {
+        None
+    }
+
+    /// Asked after every batch of events, like [`App::to_redraw`]: `true`
+    /// makes the engine ask [`App::surfaces`] again for every monitor, as
+    /// after [`App::changed`], so that a surface can come or go on a
+    /// message. Unlike a change of the settings, it leaves an open popup
+    /// open, unless the surface it hangs from is replaced.
+    fn to_reshape(&mut self) -> bool {
+        false
+    }
+
+    /// A frame was drawn. A frame for the GPU is reported once the GPU's
+    /// thread has drawn it, in a later batch of events.
+    fn drew(&mut self, _on: On, _drawn: Drawn) {}
+
+    /// The GPU has taken over drawing, on this device as OpenGL names it.
+    fn gpu_started(&mut self, _device: &str) {}
 
     /// [`App::draw`] for the popup.
     fn draw_popup(&mut self, _paint: &mut Paint) {}

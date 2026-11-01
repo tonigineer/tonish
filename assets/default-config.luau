@@ -75,6 +75,13 @@ local settings: Settings = {
         -- line turns into the panel's where they meet.
         inverse_radius = 14,
     },
+
+    -- How panels move, such as the settings as they open and close.
+    animation = {
+        -- The most frames a second an animation draws, such as 60 to spare
+        -- the GPU on a fast monitor. 0 draws every frame the monitor shows.
+        max_fps = 0,
+    },
 }
 
 return settings

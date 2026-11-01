@@ -19,6 +19,8 @@ pub enum Message {
     Quit,
     /// Draw every panel again
     Redraw,
+    /// Show or hide the figures in the top left corner: frames a second, CPU, memory and the GPU
+    Hud,
 }
 
 impl Message {
@@ -59,7 +61,9 @@ pub fn socket_from_env() -> Option<PathBuf> {
 /// Reads to the end of the connection, not just the reply line, because the
 /// shell keeps the connection of a `quit` open until it has shut down. So
 /// `tonish msg quit && tonish` starts the new one after the old is gone.
-pub fn send(socket: &Path, message: Message) -> Result<(), String> {
+/// The shell's answer, unless it is just `ok`. An answer that starts with
+/// `error:` is an error.
+pub fn send(socket: &Path, message: Message) -> Result<Option<String>, String> {
     let mut stream = UnixStream::connect(socket)
         .map_err(|e| format!("no tonish answers at {}: {e}", socket.display()))?;
     writeln!(stream, "{}", message.name()).map_err(|e| e.to_string())?;
@@ -68,9 +72,10 @@ pub fn send(socket: &Path, message: Message) -> Result<(), String> {
         .read_to_string(&mut reply)
         .map_err(|e| e.to_string())?;
     match reply.trim_end() {
-        "ok" => Ok(()),
+        "ok" => Ok(None),
         "" => Err("tonish closed the connection without a reply".into()),
-        other => Err(other.to_owned()),
+        error if error.starts_with("error:") => Err(error.to_owned()),
+        answer => Ok(Some(answer.to_owned())),
     }
 }
 

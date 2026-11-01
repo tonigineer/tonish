@@ -9,6 +9,7 @@ tonish --config ~/test.luau     # with the settings from another file
 |---|---|
 | `-c`, `--config FILE` | Reads the settings from FILE instead, see [Settings](settings.md#another-file). |
 | `--disable-gpu` | Draws every panel on the CPU and never starts the [GPU](#the-gpu), which saves memory. |
+| `--draw-always` | Draws every panel again and again, as fast as tonish can, without waiting for the monitor, so that the [figures in the corner](#the-figures-in-the-corner) show the most frames a second it reaches. For measuring only: it keeps a CPU core busy. |
 | `msg MESSAGE` | Sends a [message](#messages) to the tonish running in this session. |
 | `-V`, `--version` | Prints the version. |
 | `-h`, `--help`, `help` | Prints the help. `tonish msg --help` describes the messages. |
@@ -50,14 +51,41 @@ If the GPU can't be used, because there is no libEGL or the driver fails, at the
 |---|---|
 | `quit` | Closes all panels and ends tonish |
 | `redraw` | Draws every panel again. With `TONISH_LOG=engine=debug`, the log then shows how long each draw took. |
+| `hud` | Hides the [figures in the corner](#the-figures-in-the-corner), or shows them again, and prints `hidden` or `shown`. |
 
 With no tonish running, `tonish msg quit` says that nobody answers and exits with 1. An unknown message is a mistake on the command line: tonish lists the known ones and exits with 2.
 
-Scripts can also talk to tonish directly. It listens on a socket at `$XDG_RUNTIME_DIR/tonish-$WAYLAND_DISPLAY.sock`. A message is one line of text, and so is the answer: `ok`, or `error: …` for a message tonish doesn't know.
+`tonish msg` prints the answer, unless it is just `ok`, and exits with 0. An answer that starts with `error:` it prints as an error, and exits with 1.
+
+Scripts can also talk to tonish directly. It listens on a socket at `$XDG_RUNTIME_DIR/tonish-$WAYLAND_DISPLAY.sock`. A message is one line of text, and so is the answer: `ok`, a word such as `hidden` for `hud`, or `error: …` for a message tonish doesn't know.
 
 ```sh
 echo quit | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/tonish-$WAYLAND_DISPLAY.sock"
 ```
+
+## The figures in the corner
+
+In the top left corner of every monitor, below the bar, tonish shows how it runs, updated twice a second. They let clicks through to the windows under them, and `tonish msg hud` hides them. Here, on an NVIDIA RTX 4090 in a headless sway, partway through the settings panel opening:
+
+```text
+tonish 0.0.6
+fps 29   frame 0.10 ms  max 0.81 ms
+cpu 1.8 %  mem 287.3 MiB  on gpu
+gpu NVIDIA GeForce RTX 4090
+HEADLESS-2 1920x1080 @2
+```
+
+| Line | What it shows |
+|---|---|
+| `fps` | Frames in the last second of the surface drawn most often, such as the settings panel while it opens. 0 while nothing moves, since tonish draws only what changes. |
+| `frame`, `max` | How long a frame took in the last second, the median and the slowest: building its scene and drawing it, up to handing it to the compositor, as `took` in the [log](logging.md). |
+| `cpu` | tonish's share of one CPU core since the last update, as `top` shows it, of every thread, the GPU's included. |
+| `mem` | The memory tonish holds, its resident set, the GPU's driver included. |
+| `on` | Whether the GPU or the CPU drew the last frame. |
+| `gpu` | The device the GPU [started](#the-gpu) on, or `not started`. |
+| The last line | The monitor's name, its size in logical pixels and its scale. |
+
+The figures themselves don't count: they would show their own two frames a second. With `--draw-always`, `fps` is the most frames a second tonish reaches; see [Measuring](../developing/drawing.md#on-the-gpu-in-a-compositor) for what it reached on one machine. Their text is set in the monospace font fontconfig picks, which tonish looks up with `fc-match` when it first shows them. Without one, it shows them without text and logs a warning.
 
 ## Environment
 

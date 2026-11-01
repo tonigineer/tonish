@@ -3,7 +3,7 @@
 //! on a valid command line and never handles those cases.
 
 use clap::{Parser, Subcommand};
-use engine::Gpu;
+use engine::{Gpu, Options};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -35,16 +35,23 @@ pub struct Args {
     #[arg(long)]
     disable_gpu: bool,
 
+    /// Draw every panel again and again, as fast as tonish can, without waiting for the monitor: the figures in the corner then show the most frames a second it reaches
+    #[arg(long)]
+    draw_always: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
 impl Args {
-    pub fn gpu(&self) -> Gpu {
-        if self.disable_gpu {
-            Gpu::Disabled
-        } else {
-            Gpu::Enabled
+    pub fn options(&self) -> Options {
+        Options {
+            gpu: if self.disable_gpu {
+                Gpu::Disabled
+            } else {
+                Gpu::Enabled
+            },
+            draw_always: self.draw_always,
         }
     }
 }
@@ -153,8 +160,15 @@ mod tests {
 
     #[test]
     fn the_gpu_is_used_unless_disabled() {
-        assert_eq!(parse(&[]).unwrap().gpu(), Gpu::Enabled);
-        assert_eq!(parse(&["--disable-gpu"]).unwrap().gpu(), Gpu::Disabled);
+        assert_eq!(parse(&[]).unwrap().options().gpu, Gpu::Enabled);
+        let disabled = parse(&["--disable-gpu"]).unwrap().options();
+        assert_eq!(disabled.gpu, Gpu::Disabled);
+    }
+
+    #[test]
+    fn panels_wait_for_the_monitor_unless_drawn_always() {
+        assert!(!parse(&[]).unwrap().options().draw_always);
+        assert!(parse(&["--draw-always"]).unwrap().options().draw_always);
     }
 
     #[test]
