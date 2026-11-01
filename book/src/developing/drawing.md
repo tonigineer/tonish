@@ -9,7 +9,7 @@ A shape in tonish isn't a set of pixels or a path. It's a function that gives th
 
 The GPU's fragment shader works with the same number, so the CPU and the GPU draw the same scenes, see [The GPU](#the-gpu).
 
-Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
+The shapes so far are `Rect`, `RoundedRect` and `Circle`; `Fillet`, a concave corner, which laid between two shapes of the same colour joins them in a curve; and `Outline`, which draws any shape as a band around its edge. Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
 
 | Method | What it gives |
 |---|---|
@@ -38,7 +38,7 @@ The solid and empty stretches must not change a single byte of the result. [The 
 
 `gpu::Gpu` in the renderer draws a scene with OpenGL ES 3.0, in one draw call. Every shape becomes an instance of a quad over its box. The fragment shader, `gpu/shape.frag`, computes the distance at each pixel's centre and turns it into coverage exactly as the CPU rasteriser does.
 
-A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with rounded corners, which is also a circle, folded into an outline or not. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
+A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with rounded corners, which is also a circle, with a circle cut out of it or not, which is how a `Fillet` gets its curve, and folded into an outline or not. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
 
 A scene with a shape that has no `sdf`, such as an outline of an outline, is drawn by the CPU rasteriser, and the GPU shows the result as a texture. The surface stays with EGL even then: a compositor with explicit sync, such as Hyprland with NVIDIA's driver, ends the connection when a surface that EGL has drawn into gets a shared-memory buffer.
 

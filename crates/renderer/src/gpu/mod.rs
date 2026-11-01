@@ -25,6 +25,7 @@ const IMAGE: [&str; 2] = [include_str!("image.vert"), include_str!("image.frag")
 struct Instance {
     rect: [f32; 4],
     shape: [f32; 2],
+    cut: [f32; 3],
     color: [u8; 4],
 }
 
@@ -109,7 +110,8 @@ impl Gpu {
             for (index, size, kind, offset) in [
                 (0, 4, glow::FLOAT, 0),
                 (1, 2, glow::FLOAT, 16),
-                (2, 4, glow::UNSIGNED_BYTE, 24),
+                (2, 3, glow::FLOAT, 24),
+                (3, 4, glow::UNSIGNED_BYTE, 36),
             ] {
                 gl.enable_vertex_attrib_array(index);
                 // Normalised, so that the colour bytes arrive as 0..1.
@@ -167,6 +169,7 @@ impl Gpu {
             self.instances.push(Instance {
                 rect: [sdf.center.x, sdf.center.y, sdf.half.x, sdf.half.y],
                 shape: [sdf.radius, sdf.outline],
+                cut: [sdf.cut.x, sdf.cut.y, sdf.cut_radius],
                 color: [c.r, c.g, c.b, c.a],
             });
         }

@@ -106,32 +106,35 @@ impl Shell {
 
     /// Against the stretch across the panel at the pointer, on the side
     /// away from the monitor's edge, so that the settings hang from the
-    /// panel rather than cover it.
+    /// panel rather than cover it. Moved back by the room for the concave
+    /// corners, so that the card itself starts at the pointer, but not
+    /// before the panel's start, since the anchor has to lie on it.
     fn settings(&self, output: OutputId, surface: SurfaceId, at: (f32, f32)) -> Option<PopupSpec> {
         let name = self.monitors.get(&output)?;
         let panel = self.screen(name.as_deref())?.panels.get(surface.0)?;
         let across = panel.thickness as i32;
+        let back = |along: f32| (along - settings::RADIUS).max(0.0) as i32;
         let (anchor, side) = match panel.orientation {
             Orientation::Horizontal => {
                 let side = match panel.anchor {
                     Anchor::Bottom => Side::Above,
                     _ => Side::Below,
                 };
-                ((at.0 as i32, 0, 1, across), side)
+                ((back(at.0), 0, 1, across), side)
             }
             Orientation::Vertical => {
                 let side = match panel.anchor {
                     Anchor::Right => Side::Left,
                     _ => Side::Right,
                 };
-                ((0, at.1 as i32, across, 1), side)
+                ((0, back(at.1), across, 1), side)
             }
         };
         Some(PopupSpec {
             parent: (output, surface),
             anchor,
             side,
-            size: settings::SIZE,
+            size: settings::size(side),
         })
     }
 }
@@ -317,10 +320,14 @@ impl App for Shell {
                 };
             }
             // Hyprland sends a click outside the settings to them while they
-            // hold the grab, with a point outside them.
+            // hold the grab, with a point outside them. The room beside the
+            // card, where only the concave corners are, counts as outside.
             On::Popup => {
-                let (w, h) = settings::SIZE;
-                if !(0.0..w as f32).contains(&at.0) || !(0.0..h as f32).contains(&at.1) {
+                let Some(spec) = &self.popup else {
+                    return;
+                };
+                let [p0, p1] = settings::card(spec.side);
+                if !(p0.x..p1.x).contains(&at.0) || !(p0.y..p1.y).contains(&at.1) {
                     self.popup = None;
                 }
             }
@@ -343,7 +350,7 @@ impl App for Shell {
 
     fn draw_popup(&mut self, paint: &mut Paint) {
         if let Some(spec) = &self.popup {
-            settings::draw(paint.scene, paint.size, spec.side, &self.theme);
+            settings::draw(paint.scene, spec.side, &self.theme);
         }
     }
 
@@ -403,9 +410,9 @@ mod tests {
         shell.pressed(bar(), (120.5, 20.0), Button::Right);
         let want = PopupSpec {
             parent: (OutputId(1), SurfaceId(0)),
-            anchor: (120, 0, 1, 44),
+            anchor: (120 - settings::RADIUS as i32, 0, 1, 44),
             side: Side::Below,
-            size: settings::SIZE,
+            size: settings::size(Side::Below),
         };
         assert_eq!(shell.popup(), Some(want));
     }
@@ -419,7 +426,23 @@ mod tests {
         let mut shell = shell_on_dp1(vertical);
         shell.pressed(bar(), (12.0, 300.0), Button::Right);
         let popup = shell.popup().unwrap();
-        assert_eq!((popup.anchor, popup.side), ((0, 300, 30, 1), Side::Right));
+        let back = 300 - settings::RADIUS as i32;
+        assert_eq!((popup.anchor, popup.side), ((0, back, 30, 1), Side::Right));
+    }
+
+    #[test]
+    fn near_the_panels_start_the_settings_stay_on_it() {
+        let mut shell = shell_on_dp1(Config::default());
+        shell.pressed(bar(), (5.0, 20.0), Button::Right);
+        assert_eq!(shell.popup().unwrap().anchor, (0, 0, 1, 44));
+    }
+
+    #[test]
+    fn a_click_beside_the_card_closes_the_settings() {
+        let mut shell = shell_on_dp1(Config::default());
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.pressed(On::Popup, (settings::RADIUS / 2.0, 100.0), Button::Left);
+        assert_eq!(shell.popup(), None);
     }
 
     #[test]
@@ -442,7 +465,7 @@ mod tests {
     fn a_click_inside_the_settings_keeps_them_open() {
         let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
-        shell.pressed(On::Popup, (10.0, 10.0), Button::Left);
+        shell.pressed(On::Popup, (settings::RADIUS + 10.0, 10.0), Button::Left);
         assert!(shell.popup().is_some());
     }
 
@@ -463,18 +486,20 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_cover_their_whole_surface() {
+    fn the_card_covers_its_part_of_the_settings() {
         let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
         let mut scene = Scene::new();
+        let (w, h) = settings::size(Side::Below);
         let mut paint = Paint {
             scene: &mut scene,
-            size: (280.0, 180.0),
+            size: (w as f32, h as f32),
             scale: 1.0,
         };
         shell.draw_popup(&mut paint);
         let [p0, p1] = scene.shapes[0].bounds();
-        assert!(p0.x <= 0.0 && p0.y <= 0.0 && p1.x >= 280.0 && p1.y >= 180.0);
+        let [c0, c1] = settings::card(Side::Below);
+        assert!(p0.x <= c0.x && p0.y <= 0.0 && p1.x >= c1.x && p1.y >= h as f32);
     }
 
     #[test]

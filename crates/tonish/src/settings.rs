@@ -1,36 +1,81 @@
-//! The settings panel, which a right-click on a panel opens next to the
-//! pointer.
+//! The settings panel, which a right-click on a panel opens, hanging from
+//! it.
 
 use engine::Side;
-use renderer::{Point, Rect, Scene, Shape};
+use renderer::{Corner, Fillet, Point, RoundedRect, Scene};
 
 use crate::theme::Theme;
 
 /// Logical pixels.
-pub const SIZE: (u32, u32) = (280, 180);
+pub const CARD: (f32, f32) = (280.0, 180.0);
+/// Of the card's free corners, and of the concave corners where it meets
+/// the panel.
+pub const RADIUS: f32 = 14.0;
 
-/// `side` is where the panel sits from the panel it hangs from.
-pub fn draw(scene: &mut Scene, size: (f32, f32), side: Side, t: &Theme) {
-    let card = Rect {
-        p0: Point::new(0.0, 0.0),
-        p1: Point::new(size.0, size.1),
-        color: t.surface,
+/// The card, and room beside it along the panel for the concave corners.
+pub fn size(side: Side) -> (u32, u32) {
+    let (w, h) = CARD;
+    let (w, h) = match side {
+        Side::Above | Side::Below => (w + 2.0 * RADIUS, h),
+        Side::Left | Side::Right => (w, h + 2.0 * RADIUS),
     };
-    scene.push(card);
-    // Inset by half its width, because an outline is centred on the edge
-    // and the half outside the surface would be cut off. On the side
-    // against the panel it goes outside altogether, so that no line
-    // separates the card from the panel it hangs from.
-    let edge = 1.0;
-    let (mut p0, mut p1) = (
-        Point::new(edge / 2.0, edge / 2.0),
-        Point::new(size.0 - edge / 2.0, size.1 - edge / 2.0),
-    );
+    (w as u32, h as u32)
+}
+
+/// The card's corners on the popup.
+pub fn card(side: Side) -> [Point; 2] {
+    let (w, h) = CARD;
     match side {
-        Side::Below => p0.y = -edge,
-        Side::Above => p1.y = size.1 + edge,
-        Side::Right => p0.x = -edge,
-        Side::Left => p1.x = size.0 + edge,
+        Side::Above | Side::Below => [Point::new(RADIUS, 0.0), Point::new(RADIUS + w, h)],
+        Side::Left | Side::Right => [Point::new(0.0, RADIUS), Point::new(w, RADIUS + h)],
     }
-    scene.push(Rect { p0, p1, ..card }.outline(edge, t.outline));
+}
+
+/// In the panel's colour and without an outline, so that the card reads as
+/// part of the panel.
+pub fn draw(scene: &mut Scene, side: Side, t: &Theme) {
+    let [p0, p1] = card(side);
+    // Reaching past the edge against the panel, so that only the free
+    // corners show rounded.
+    let (mut q0, mut q1) = (p0, p1);
+    match side {
+        Side::Below => q0.y -= RADIUS,
+        Side::Above => q1.y += RADIUS,
+        Side::Right => q0.x -= RADIUS,
+        Side::Left => q1.x += RADIUS,
+    }
+    scene.push(RoundedRect {
+        p0: q0,
+        p1: q1,
+        r: RADIUS,
+        color: t.surface,
+    });
+    // Where the card's sides leave the panel, so that the panel's edge
+    // curves into them.
+    let fillets = match side {
+        Side::Below => [
+            (Point::new(p0.x, 0.0), Corner::TopRight),
+            (Point::new(p1.x, 0.0), Corner::TopLeft),
+        ],
+        Side::Above => [
+            (Point::new(p0.x, p1.y), Corner::BottomRight),
+            (Point::new(p1.x, p1.y), Corner::BottomLeft),
+        ],
+        Side::Right => [
+            (Point::new(0.0, p0.y), Corner::BottomLeft),
+            (Point::new(0.0, p1.y), Corner::TopLeft),
+        ],
+        Side::Left => [
+            (Point::new(p1.x, p0.y), Corner::BottomRight),
+            (Point::new(p1.x, p1.y), Corner::TopRight),
+        ],
+    };
+    for (at, corner) in fillets {
+        scene.push(Fillet {
+            at,
+            corner,
+            r: RADIUS,
+            color: t.surface,
+        });
+    }
 }

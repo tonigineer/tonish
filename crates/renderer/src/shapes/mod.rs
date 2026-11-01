@@ -7,12 +7,16 @@
 //! stay together. The tests that every shape has to pass are in this file.
 
 mod circle;
+mod fillet;
 mod outline;
 mod rect;
+mod rounded;
 
 pub use circle::Circle;
+pub use fillet::{Corner, Fillet};
 pub use outline::Outline;
 pub use rect::Rect;
+pub use rounded::RoundedRect;
 
 use crate::scene::{Point, Rgba};
 
@@ -77,10 +81,11 @@ pub trait Shape: Send {
 }
 
 /// A box with rounded corners, which with the radius at half its size is a
-/// circle, folded into an outline if `outline` is above 0. One form for
-/// every shape keeps the shader free of branches per shape, so the GPU draws
-/// a whole scene with a single draw call.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// circle, with a circle cut out of it if `cut_radius` is above 0, as for a
+/// [`Fillet`], and folded into an outline if `outline` is above 0. One form
+/// for every shape keeps the shader free of branches per shape, so the GPU
+/// draws a whole scene with a single draw call.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Sdf {
     pub center: Point,
     /// Half the width and the height, rounded corners included.
@@ -88,6 +93,8 @@ pub struct Sdf {
     pub radius: f32,
     /// The width of the band centred on the edge, as [`Outline`] draws it.
     pub outline: f32,
+    pub cut: Point,
+    pub cut_radius: f32,
 }
 
 impl Sdf {
@@ -98,7 +105,11 @@ impl Sdf {
     pub fn distance(&self, p: Point) -> f32 {
         let qx = (p.x - self.center.x).abs() - self.half.x + self.radius;
         let qy = (p.y - self.center.y).abs() - self.half.y + self.radius;
-        let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - self.radius;
+        let mut d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - self.radius;
+        // Before the outline, so that an outline follows the cut too.
+        if self.cut_radius > 0.0 {
+            d = d.max(self.cut_radius - (p.x - self.cut.x).hypot(p.y - self.cut.y));
+        }
         if self.outline > 0.0 {
             d.abs() - self.outline / 2.0
         } else {
@@ -112,7 +123,7 @@ impl Sdf {
 /// and both backends are held to the same random scenes.
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{Circle, Rect, Shape};
+    use super::{Circle, Corner, Fillet, Rect, RoundedRect, Shape};
     use crate::scene::{Point, Rgba};
 
     pub fn white() -> Rgba {
@@ -142,6 +153,28 @@ pub(crate) mod fixtures {
     pub fn circle() -> Circle {
         Circle {
             center: Point::new(10.0, 10.0),
+            r: 8.0,
+            color: orange(),
+        }
+    }
+
+    /// Wider than tall, so that the arcs of its corners meet straight sides
+    /// on every side.
+    pub fn rounded() -> RoundedRect {
+        RoundedRect {
+            p0: Point::new(0.0, 0.0),
+            p1: Point::new(30.0, 20.0),
+            r: 4.0,
+            color: orange(),
+        }
+    }
+
+    /// Filled at (10, 0), reaching left and down, as beside the left edge of
+    /// a card that hangs from a bar.
+    pub fn fillet() -> Fillet {
+        Fillet {
+            at: Point::new(10.0, 0.0),
+            corner: Corner::TopRight,
             r: 8.0,
             color: orange(),
         }
@@ -199,18 +232,39 @@ pub(crate) mod fixtures {
             color,
         };
         let width = dice.coordinate(0.5, 4.0);
-        match (dice.roll() * 4.0) as u32 {
+        let rounded = RoundedRect {
+            p0: rect.p0,
+            p1: rect.p1,
+            r: dice.between(0.0, dx.min(dy)),
+            color,
+        };
+        let corners = [
+            Corner::TopLeft,
+            Corner::TopRight,
+            Corner::BottomLeft,
+            Corner::BottomRight,
+        ];
+        let fillet = Fillet {
+            at: Point::new(x, y),
+            corner: corners[(dice.roll() * 3.999) as usize],
+            r: dice.coordinate(0.5, h.max(4.0) / 2.0),
+            color,
+        };
+        match (dice.roll() * 7.0) as u32 {
             0 => Box::new(rect),
             1 => Box::new(circle),
             2 => Box::new(rect.outline(width, color)),
-            _ => Box::new(circle.outline(width, color)),
+            3 => Box::new(circle.outline(width, color)),
+            4 => Box::new(rounded),
+            5 => Box::new(rounded.outline(width, color)),
+            _ => Box::new(fillet),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{circle, square, white};
+    use super::fixtures::{circle, fillet, rounded, square, white};
     use super::*;
 
     /// Backends skip every pixel outside `bounds`, so a covered point
@@ -268,6 +322,10 @@ mod tests {
         assert_bounds_enclose(&square().outline(3.0, white()));
         assert_bounds_enclose(&circle().outline(3.0, white()));
         assert_bounds_enclose(&circle().outline(2.0, white()).outline(1.0, white()));
+        assert_bounds_enclose(&rounded());
+        assert_bounds_enclose(&rounded().outline(2.0, white()));
+        assert_bounds_enclose(&fillet());
+        assert_bounds_enclose(&fillet().outline(1.5, white()));
     }
 
     /// The GPU evaluates `sdf` where the CPU evaluates `distance`, so any
@@ -300,6 +358,10 @@ mod tests {
         assert_stretches_hold(&square().outline(3.0, white()));
         assert_stretches_hold(&circle().outline(3.0, white()));
         assert_stretches_hold(&circle().outline(2.0, white()).outline(1.0, white()));
+        assert_stretches_hold(&rounded());
+        assert_stretches_hold(&rounded().outline(2.0, white()));
+        assert_stretches_hold(&fillet());
+        assert_stretches_hold(&fillet().outline(1.5, white()));
     }
 
     /// Every shape, including new ones, belongs in this list.
@@ -310,6 +372,10 @@ mod tests {
         assert_sdf_matches(&square().outline(3.0, white()));
         assert_sdf_matches(&circle().outline(3.0, white()));
         assert_sdf_matches(&circle().outline(2.0, white()).outline(1.0, white()));
+        assert_sdf_matches(&rounded());
+        assert_sdf_matches(&rounded().outline(2.0, white()));
+        assert_sdf_matches(&fillet());
+        assert_sdf_matches(&fillet().outline(1.5, white()));
     }
 
     #[test]
@@ -318,6 +384,9 @@ mod tests {
         assert!(circle().sdf().is_some());
         assert!(square().outline(3.0, white()).sdf().is_some());
         assert!(circle().outline(3.0, white()).sdf().is_some());
+        assert!(rounded().sdf().is_some());
+        assert!(rounded().outline(2.0, white()).sdf().is_some());
+        assert!(fillet().sdf().is_some());
         assert!(
             circle()
                 .outline(2.0, white())
