@@ -6,7 +6,7 @@ use crate::ipc::{self, Message};
 use crate::settings;
 use crate::theme::Theme;
 use engine::{
-    self, App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply,
+    self, App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
     SurfaceId, SurfaceSpec,
 };
 use renderer::{Circle, Point, Rect, Scene, Shape};
@@ -102,6 +102,37 @@ impl Shell {
     pub fn screen(&self, monitor: Option<&str>) -> Option<&Screen> {
         let named = monitor.and_then(|m| self.screens.iter().find(|s| s.monitor == m));
         named.or_else(|| self.screens.iter().find(|s| s.monitor == EVERY))
+    }
+
+    /// Against the stretch across the panel at the pointer, on the side
+    /// away from the monitor's edge, so that the settings hang from the
+    /// panel rather than cover it.
+    fn settings(&self, output: OutputId, surface: SurfaceId, at: (f32, f32)) -> Option<PopupSpec> {
+        let name = self.monitors.get(&output)?;
+        let panel = self.screen(name.as_deref())?.panels.get(surface.0)?;
+        let across = panel.thickness as i32;
+        let (anchor, side) = match panel.orientation {
+            Orientation::Horizontal => {
+                let side = match panel.anchor {
+                    Anchor::Bottom => Side::Above,
+                    _ => Side::Below,
+                };
+                ((at.0 as i32, 0, 1, across), side)
+            }
+            Orientation::Vertical => {
+                let side = match panel.anchor {
+                    Anchor::Right => Side::Left,
+                    _ => Side::Right,
+                };
+                ((0, at.1 as i32, across, 1), side)
+            }
+        };
+        Some(PopupSpec {
+            parent: (output, surface),
+            anchor,
+            side,
+            size: settings::SIZE,
+        })
     }
 }
 
@@ -278,14 +309,22 @@ impl App for Shell {
     /// them would: the compositor closes them on its own only for clicks
     /// outside every surface of tonish.
     fn pressed(&mut self, on: On, at: (f32, f32), button: Button) {
-        let On::Surface(output, surface) = on else {
-            return;
-        };
-        self.popup = (button == Button::Right).then_some(PopupSpec {
-            parent: (output, surface),
-            at: (at.0 as i32, at.1 as i32),
-            size: settings::SIZE,
-        });
+        match on {
+            On::Surface(output, surface) => {
+                self.popup = match button {
+                    Button::Right => self.settings(output, surface, at),
+                    _ => None,
+                };
+            }
+            // Hyprland sends a click outside the settings to them while they
+            // hold the grab, with a point outside them.
+            On::Popup => {
+                let (w, h) = settings::SIZE;
+                if !(0.0..w as f32).contains(&at.0) || !(0.0..h as f32).contains(&at.1) {
+                    self.popup = None;
+                }
+            }
+        }
     }
 
     fn key(&mut self, key: Key) {
@@ -303,7 +342,9 @@ impl App for Shell {
     }
 
     fn draw_popup(&mut self, paint: &mut Paint) {
-        settings::draw(paint.scene, paint.size, &self.theme);
+        if let Some(spec) = &self.popup {
+            settings::draw(paint.scene, paint.size, spec.side, &self.theme);
+        }
     }
 
     fn socket(&self) -> Option<PathBuf> {
@@ -348,22 +389,50 @@ mod tests {
         On::Surface(OutputId(1), SurfaceId(0))
     }
 
+    /// With its monitor known, as after the engine asked for its surfaces.
+    fn shell_on_dp1(config: Config) -> Shell {
+        let mut shell = Shell::new(config);
+        shell.surfaces(&output(1, "DP-1"));
+        shell
+    }
+
     #[test]
-    fn a_right_click_on_a_panel_opens_the_settings_there() {
-        let mut shell = Shell::default();
+    fn a_right_click_on_a_bar_along_the_top_hangs_the_settings_below_it() {
+        let mut shell = shell_on_dp1(Config::default());
         assert_eq!(shell.popup(), None);
         shell.pressed(bar(), (120.5, 20.0), Button::Right);
         let want = PopupSpec {
             parent: (OutputId(1), SurfaceId(0)),
-            at: (120, 20),
+            anchor: (120, 0, 1, 44),
+            side: Side::Below,
             size: settings::SIZE,
         };
         assert_eq!(shell.popup(), Some(want));
     }
 
     #[test]
+    fn a_right_click_on_a_bar_down_the_left_hangs_the_settings_right_of_it() {
+        let vertical = Config {
+            orientation: Orientation::Vertical,
+            thickness: 30.0,
+        };
+        let mut shell = shell_on_dp1(vertical);
+        shell.pressed(bar(), (12.0, 300.0), Button::Right);
+        let popup = shell.popup().unwrap();
+        assert_eq!((popup.anchor, popup.side), ((0, 300, 30, 1), Side::Right));
+    }
+
+    #[test]
+    fn a_click_outside_the_settings_that_reaches_them_closes_them() {
+        let mut shell = shell_on_dp1(Config::default());
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
+        shell.pressed(On::Popup, (-105.9, 17.2), Button::Right);
+        assert_eq!(shell.popup(), None);
+    }
+
+    #[test]
     fn another_click_on_a_panel_closes_the_settings() {
-        let mut shell = Shell::default();
+        let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
         shell.pressed(bar(), (300.0, 20.0), Button::Left);
         assert_eq!(shell.popup(), None);
@@ -371,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_click_inside_the_settings_keeps_them_open() {
-        let mut shell = Shell::default();
+        let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
         shell.pressed(On::Popup, (10.0, 10.0), Button::Left);
         assert!(shell.popup().is_some());
@@ -379,7 +448,7 @@ mod tests {
 
     #[test]
     fn escape_closes_the_settings() {
-        let mut shell = Shell::default();
+        let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
         shell.key(Key::Escape);
         assert_eq!(shell.popup(), None);
@@ -387,7 +456,7 @@ mod tests {
 
     #[test]
     fn settings_the_compositor_closed_stay_closed() {
-        let mut shell = Shell::default();
+        let mut shell = shell_on_dp1(Config::default());
         shell.pressed(bar(), (120.0, 20.0), Button::Right);
         shell.popup_closed();
         assert_eq!(shell.popup(), None);
@@ -395,7 +464,8 @@ mod tests {
 
     #[test]
     fn the_settings_cover_their_whole_surface() {
-        let mut shell = Shell::default();
+        let mut shell = shell_on_dp1(Config::default());
+        shell.pressed(bar(), (120.0, 20.0), Button::Right);
         let mut scene = Scene::new();
         let mut paint = Paint {
             scene: &mut scene,

@@ -21,7 +21,7 @@ Three kinds of tests deserve a mention:
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
 | `test_drawing.py` | `tonish msg redraw`, and how the bar looks |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
-| `test_settings_panel.py` | A right-click on the bar opens the settings panel at the pointer, and a left click on the bar, a click outside or Escape closes it |
+| `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer, and a left click on the bar, a click outside or Escape closes it |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
 - a fresh `HOME`, settings folder and runtime folder, so tests can't affect each other or your desktop;

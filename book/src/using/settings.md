@@ -17,7 +17,7 @@ Pixels here are logical pixels, as your compositor counts them: on a monitor at 
 
 ## The settings panel
 
-Right-click a panel to open the settings panel next to the pointer. Escape, a click outside it, or a left click on a panel closes it. It shows no settings yet; the file is still the place to change them.
+Right-click a panel to open the settings panel. It hangs from the panel's inner edge where you clicked: below a panel along the top, to the right of one down the left. Escape, a click outside it, or a left click on a panel closes it. It shows no settings yet; the file is still the place to change them.
 
 ## Changes apply when you save
 

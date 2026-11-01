@@ -90,10 +90,24 @@ pub enum Key {
 pub struct PopupSpec {
     /// The layer surface it hangs from.
     pub parent: (OutputId, SurfaceId),
-    /// Logical pixels on the parent, where the popup's top-left corner goes.
-    pub at: (i32, i32),
+    /// Logical pixels on the parent, as x, y, width and height: the
+    /// rectangle the popup is put against, such as the stretch across a
+    /// panel at the pointer.
+    pub anchor: (i32, i32, i32, i32),
+    pub side: Side,
     /// Logical pixels.
     pub size: (u32, u32),
+}
+
+/// The side of the anchor the popup goes on, starting at its left or top
+/// end. Where there is no room, the compositor slides the popup along that
+/// side, or flips it to the opposite one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Above,
+    Below,
+    Left,
+    Right,
 }
 
 /// Lends the engine's one scene, cleared before every draw, so that its

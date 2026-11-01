@@ -19,9 +19,12 @@ def opened(desktop):
     assert "popup opened" in desktop.logged(), desktop.logged()
 
 
-def test_a_right_click_on_the_bar_opens_the_settings_there(desktop):
+def test_a_right_click_on_the_bar_hangs_the_settings_below_it(desktop):
     opened(desktop)
-    # The card's left edge is where the click was.
+    # From the bar's bottom edge, 44 px down, as tall as the card, and with
+    # its left edge where the click was.
+    assert near(desktop.at(340, 222), CARD), desktop.at(340, 222)
+    assert not near(desktop.at(340, 228), CARD), desktop.at(340, 228)
     assert not near(desktop.at(196, 120), CARD), desktop.at(196, 120)
 
 

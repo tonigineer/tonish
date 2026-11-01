@@ -15,7 +15,7 @@ use smithay_client_toolkit::shell::xdg::XdgShell;
 use tracing::{debug, warn};
 
 use super::{Engine, Role, Surface, Target, name};
-use crate::app::PopupSpec;
+use crate::app::{PopupSpec, Side};
 
 impl Engine {
     /// Called after every batch of events, after the app has heard of them
@@ -55,9 +55,16 @@ impl Engine {
         };
         let positioner = XdgPositioner::new(xdg).map_err(|e| e.to_string())?;
         positioner.set_size(spec.size.0 as i32, spec.size.1 as i32);
-        positioner.set_anchor_rect(spec.at.0, spec.at.1, 1, 1);
-        positioner.set_anchor(Anchor::TopLeft);
-        positioner.set_gravity(Gravity::BottomRight);
+        let (x, y, w, h) = spec.anchor;
+        positioner.set_anchor_rect(x, y, w, h);
+        let (anchor, gravity) = match spec.side {
+            Side::Above => (Anchor::TopLeft, Gravity::TopRight),
+            Side::Below => (Anchor::BottomLeft, Gravity::BottomRight),
+            Side::Left => (Anchor::TopLeft, Gravity::BottomLeft),
+            Side::Right => (Anchor::TopRight, Gravity::BottomRight),
+        };
+        positioner.set_anchor(anchor);
+        positioner.set_gravity(gravity);
         // Slid or flipped rather than cut off at the monitor's edge.
         positioner.set_constraint_adjustment(
             ConstraintAdjustment::SlideX
@@ -74,7 +81,13 @@ impl Engine {
             popup.xdg_popup().grab(seat, *serial);
         }
         popup.wl_surface().commit();
-        debug!(monitor = %name(&out.info), at = ?spec.at, size = ?spec.size, "popup opened");
+        debug!(
+            monitor = %name(&out.info),
+            anchor = ?spec.anchor,
+            side = ?spec.side,
+            size = ?spec.size,
+            "popup opened"
+        );
         self.popup = Some(Surface {
             window: None,
             role: Role::Popup { popup, spec },
