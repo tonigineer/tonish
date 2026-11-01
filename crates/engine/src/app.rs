@@ -16,7 +16,7 @@ pub struct SurfaceId(pub usize);
 
 /// Taken when the monitor appears and not updated yet, so a later change of
 /// mode or scale leaves it stale until tonish restarts.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Output {
     pub id: OutputId,
     /// `None` on compositors without wl_output version 4, so a shell needs a
@@ -42,7 +42,7 @@ pub enum Layer {
 
 /// Mirrors the wlr-layer-shell requests one to one, so that the protocol's
 /// documentation applies field by field.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSpec {
     /// Becomes the layer surface's namespace, behind a prefix the engine
     /// adds. Compositors match namespaces in rules such as sway's
@@ -153,12 +153,13 @@ pub trait App {
         Vec::new()
     }
 
-    /// `true` makes the engine destroy every surface and ask
-    /// [`App::surfaces`] again. Rebuilding is the one way to apply any
-    /// change, since a layer surface's namespace can never change and its
-    /// layer only with a newer protocol version than the engine uses. A save
-    /// that changes nothing should return `false`, because a rebuild makes
-    /// the panels blink.
+    /// `true` makes the engine ask [`App::surfaces`] again. A surface that
+    /// keeps its name and layer is changed in place and drawn again at the
+    /// size the compositor gives it, without a blink. Any other is replaced,
+    /// because a layer surface's namespace can never change and its layer
+    /// only with a newer protocol version than the engine uses, and a
+    /// replaced surface blinks. A change that leaves every surface's spec as
+    /// it was still needs [`App::to_redraw`] to show.
     fn changed(&mut self, _path: &Path) -> bool {
         false
     }

@@ -208,6 +208,18 @@ enum Role {
     },
 }
 
+impl Surface {
+    /// Whether the surface can take `spec` in place: a layer surface's
+    /// namespace is fixed, and so is its layer at the protocol version the
+    /// engine uses.
+    fn keeps(&self, spec: &SurfaceSpec) -> bool {
+        match &self.role {
+            Role::Layer { spec: old, .. } => old.name == spec.name && old.layer == spec.layer,
+            Role::Popup { .. } => false,
+        }
+    }
+}
+
 impl Role {
     fn wl_surface(&self) -> &wl_surface::WlSurface {
         match self {
@@ -412,6 +424,7 @@ impl Engine {
         // keyboard focus away from windows.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
+        debug!(name = %spec.name, "surface made");
         Surface {
             window: None,
             role: Role::Layer { layer, spec },
@@ -446,29 +459,67 @@ impl Engine {
                 break;
             }
         }
-        let mut rebuild = false;
+        let mut reshape = false;
         for path in &changed {
-            rebuild |= self.app.changed(path);
+            reshape |= self.app.changed(path);
         }
-        if rebuild {
-            self.rebuild();
+        if reshape {
+            self.reshape();
         }
     }
 
-    /// The old surfaces are destroyed as they are dropped; the new ones are
-    /// drawn once the compositor configures them, as on a first start.
-    fn rebuild(&mut self) {
-        debug!("rebuilding every surface");
+    /// Matches the app's new surfaces to the old ones by their place in the
+    /// list, as [`SurfaceId`] does. Surfaces that are gone are destroyed as
+    /// they are dropped, and new ones are drawn once the compositor
+    /// configures them, as on a first start.
+    fn reshape(&mut self) {
+        // Its place on the parent comes from the parent's old shape.
         self.lose_popup();
         for oi in 0..self.outs.len() {
             let wl = self.outs[oi].wl.clone();
             let specs = self.app.surfaces(&self.outs[oi].info);
-            let surfaces = specs
-                .into_iter()
-                .map(|spec| self.layer(&wl, spec))
-                .collect();
+            let mut old = std::mem::take(&mut self.outs[oi].surfaces).into_iter();
+            let mut surfaces = Vec::with_capacity(specs.len());
+            for spec in specs {
+                let surf = match old.next() {
+                    Some(surf) if surf.keeps(&spec) => self.reshape_one(surf, spec),
+                    _ => self.layer(&wl, spec),
+                };
+                surfaces.push(surf);
+            }
             self.outs[oi].surfaces = surfaces;
         }
+    }
+
+    /// The new state applies with a commit, which the compositor answers with
+    /// a configure, and the configure draws the surface at its new size.
+    fn reshape_one(&self, mut surf: Surface, spec: SurfaceSpec) -> Surface {
+        let Role::Layer { layer, spec: old } = &mut surf.role else {
+            return surf;
+        };
+        if *old == spec {
+            return surf;
+        }
+        layer.set_anchor(spec.anchor);
+        layer.set_size(spec.size.0, spec.size.1);
+        layer.set_exclusive_zone(spec.exclusive);
+        let m = spec.margin;
+        layer.set_margin(m.0, m.1, m.2, m.3);
+        debug!(name = %spec.name, "surface reshaped");
+        // A surface that changes size waits for the configure with its new
+        // size: the app's redraw, which comes first, would draw the new shape
+        // cut to the old size, for a frame and for nothing. One that keeps its
+        // size is drawn with the redraw, since compositors such as sway send
+        // no configure for a size that stays.
+        if resized(surf.size, spec.size) {
+            surf.configured = false;
+        }
+        *old = spec;
+        match &surf.window {
+            Some(window) => window.commit(layer.wl_surface().clone()),
+            None => layer.commit(),
+        }
+        surf
     }
 
     fn redraw(&mut self) {
@@ -712,6 +763,15 @@ fn name(out: &Output) -> &str {
     out.name.as_deref().unwrap_or("unnamed")
 }
 
+/// Whether a surface of `size` changes size with the spec's size. Along an
+/// axis the spec leaves to the compositor, it counts as staying: the
+/// compositor may still change it, as for new margins, and the surface is
+/// then drawn twice, but a surface that waited for a configure that never
+/// comes would not be drawn at all.
+fn resized(size: (u32, u32), spec: (u32, u32)) -> bool {
+    (spec.0 > 0 && spec.0 != size.0) || (spec.1 > 0 && spec.1 != size.1)
+}
+
 // ── Wayland handlers ─────────────────────────────────────────────────────────
 
 impl CompositorHandler for Engine {
@@ -861,6 +921,16 @@ mod tests {
             Vec::new()
         }
         fn draw(&mut self, _: OutputId, _: SurfaceId, _: &mut Paint) {}
+    }
+
+    #[test]
+    fn a_length_left_to_the_compositor_counts_as_staying() {
+        assert!(resized((1920, 44), (0, 60)));
+        assert!(resized((600, 44), (800, 44)));
+        assert!(!resized((1920, 44), (0, 44)));
+        assert!(!resized((600, 44), (600, 44)));
+        // From down the left to along the top: the thickness changes axis.
+        assert!(resized((44, 1080), (0, 44)));
     }
 
     #[test]

@@ -150,6 +150,7 @@ pub(crate) struct Frame {
 
 enum Command {
     Draw(u64, Frame),
+    Commit(WlSurface),
     /// Destroys the surface's window, then answers.
     Forget(u64, mpsc::Sender<()>),
     Quit,
@@ -227,6 +228,17 @@ impl Window {
     }
 }
 
+impl Window {
+    /// Commits the surface's pending state on the GPU's thread, between its
+    /// frames. A commit on another thread could fall between a frame's
+    /// attach and its commit, and a compositor with explicit sync ends the
+    /// connection for a buffer committed without its sync point.
+    pub(crate) fn commit(&self, surface: WlSurface) {
+        // Fails only once the thread has ended, which it reports.
+        let _ = self.commands.send(Command::Commit(surface));
+    }
+}
+
 impl Drop for Window {
     fn drop(&mut self) {
         let (done, gone) = mpsc::channel();
@@ -255,6 +267,13 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
                 Command::Draw(key, frame) => {
                     frames.retain(|(k, _)| *k != key);
                     frames.push((key, frame));
+                }
+                Command::Commit(surface) => {
+                    surface.commit();
+                    // No frame need follow to flush it, as eglSwapBuffers
+                    // would, and the main thread's flush may have gone by
+                    // already. A broken connection shows on the main thread.
+                    let _ = conn.flush();
                 }
                 Command::Forget(key, done) => {
                     frames.retain(|(k, _)| *k != key);
@@ -322,26 +341,18 @@ impl Gles {
         frame: Frame,
     ) -> Result<(), String> {
         let waited = frame.sent.elapsed();
-        let window = match windows.entry(key) {
-            Entry::Occupied(window) => window.into_mut(),
+        let (window, fresh) = match windows.entry(key) {
+            Entry::Occupied(window) => (window.into_mut(), false),
             Entry::Vacant(entry) => {
                 let started = Instant::now();
-                let mut window = EglWindow::new(&self.display, &frame.surface, frame.size)?;
-                // Twice ahead, back to back, so that EGL allocates the three
-                // buffers a fast animation needs now, while the surface
-                // shows the same image, rather than at an animation's first
-                // frames: each allocation stalls the swap for 0.2 to 2 ms,
-                // measured with NVIDIA's driver.
-                for _ in 0..2 {
-                    self.show(&mut window, &frame)?;
-                }
+                let window = EglWindow::new(&self.display, &frame.surface, frame.size)?;
                 debug!(
                     monitor = %frame.monitor,
                     surface = %frame.target,
                     took = ?started.elapsed(),
                     "moved to the GPU"
                 );
-                entry.insert(window)
+                (entry.insert(window), true)
             }
         };
         let started = Instant::now();
@@ -355,6 +366,17 @@ impl Gles {
             waited = ?waited,
             "drew"
         );
+        // Twice more, back to back, so that EGL allocates the three buffers a
+        // fast animation needs now, while the surface shows the same image,
+        // rather than at an animation's first frames: each allocation stalls
+        // the swap for 0.2 to 2 ms, measured with NVIDIA's driver. After the
+        // first frame rather than before, so that the surface shows without
+        // waiting for them.
+        if fresh {
+            for _ in 0..2 {
+                self.show(window, &frame)?;
+            }
+        }
         Ok(())
     }
 

@@ -359,6 +359,8 @@ impl App for Shell {
                 info!(file = %path.display(), "settings changed");
                 self.config = config;
                 self.screens = layout(config);
+                // A surface that keeps its size gets no configure to draw it.
+                self.redraw = Redraw::Everything;
                 true
             }
             Err(e) => {
