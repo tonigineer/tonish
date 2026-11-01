@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::config::{self, Config};
+use crate::frame::{self, Frame, Tile};
 use crate::hang::{self, Edges};
 use crate::hud::{self, Hud};
 use crate::ipc::{self, Message};
@@ -51,7 +52,121 @@ pub struct Monitor {
 }
 
 pub struct Screen {
+    /// Drawn in tiles on surfaces of their own, under the panels, with the
+    /// bar's body.
+    pub frame: Option<Frame>,
     pub panels: Vec<Panel>,
+    pub corners: config::Corners,
+}
+
+/// What one of a monitor's surfaces shows.
+#[derive(Clone, Copy)]
+pub enum Piece<'a> {
+    /// A part of the frame.
+    Tile(Tile),
+    Panel(&'a Panel),
+    /// Keeps this many logical pixels along this edge free of windows, for
+    /// the frame and what sits inside it, and shows nothing.
+    Room(Anchor, f32),
+    /// One of the monitor's corners, by the way into the monitor from it.
+    Corner((f32, f32), config::Corners),
+}
+
+impl Screen {
+    /// The frame and the bar as one shape, and the tiles it is drawn in, on
+    /// a monitor `screen` large.
+    pub fn layout(&self, screen: (f32, f32)) -> Option<frame::Layout> {
+        let f = self.frame.as_ref()?;
+        Some(frame::Layout::new(screen, f, &self.panels))
+    }
+
+    /// In the order the engine makes their surfaces, which is also the
+    /// order they stack in: the frame first, under the panels. The figures
+    /// in the corner come after these.
+    pub fn pieces(&self, screen: (f32, f32)) -> Vec<Piece<'_>> {
+        let mut pieces: Vec<_> = (self.layout(screen))
+            .map(|l| l.tiles.into_iter().map(Piece::Tile).collect())
+            .unwrap_or_default();
+        pieces.extend(self.panels.iter().map(Piece::Panel));
+        if let Some(f) = &self.frame {
+            for edge in [Anchor::Top, Anchor::Right, Anchor::Bottom, Anchor::Left] {
+                let inside: f32 = (self.panels.iter())
+                    .filter(|p| p.anchor == edge && p.along_edge())
+                    .map(|p| p.inset() + p.gap + p.thickness)
+                    .sum();
+                // At least the frame, which a panel without a gap covers.
+                let room = f.width.max(inside);
+                if room > 0.0 {
+                    pieces.push(Piece::Room(edge, room));
+                }
+            }
+        }
+        if self.corners.radius > 0.0 {
+            for toward in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                pieces.push(Piece::Corner(toward, self.corners));
+            }
+        }
+        pieces
+    }
+}
+
+impl Piece<'_> {
+    pub fn surface(&self, screen: (f32, f32)) -> SurfaceSpec {
+        let (t, b, l, r) = (
+            engine::Anchor::TOP,
+            engine::Anchor::BOTTOM,
+            engine::Anchor::LEFT,
+            engine::Anchor::RIGHT,
+        );
+        match *self {
+            Piece::Panel(p) => p.surface(screen),
+            // From the monitor's corner: with an exclusive zone of -1, no
+            // room another surface keeps moves it.
+            Piece::Tile(tile) => {
+                let [p0, p1] = tile.rect;
+                SurfaceSpec {
+                    name: "frame",
+                    layer: Layer::Top,
+                    anchor: t | l,
+                    size: ((p1.x - p0.x) as u32, (p1.y - p0.y) as u32),
+                    exclusive: -1,
+                    margin: (p0.y as i32, 0, 0, p0.x as i32),
+                    input: false,
+                    gpu: false,
+                }
+            }
+            // One pixel: the room it keeps doesn't depend on its size.
+            Piece::Room(edge, room) => SurfaceSpec {
+                name: "room",
+                layer: Layer::Top,
+                anchor: match edge {
+                    Anchor::Top => t,
+                    Anchor::Bottom => b,
+                    Anchor::Left => l,
+                    Anchor::Right | Anchor::Center => r,
+                },
+                size: (1, 1),
+                exclusive: room.ceil() as i32,
+                margin: (0, 0, 0, 0),
+                input: false,
+                gpu: false,
+            },
+            // Above fullscreen windows too, which only the overlay layer is.
+            Piece::Corner((x, y), c) => {
+                let side = c.radius.ceil() as u32;
+                SurfaceSpec {
+                    name: "corner",
+                    layer: Layer::Overlay,
+                    anchor: (if x > 0.0 { l } else { r }) | (if y > 0.0 { t } else { b }),
+                    size: (side, side),
+                    exclusive: -1,
+                    margin: (0, 0, 0, 0),
+                    input: false,
+                    gpu: false,
+                }
+            }
+        }
+    }
 }
 
 pub struct Panel {
@@ -66,6 +181,9 @@ pub struct Panel {
     pub gap: f32,
     pub edges: Edges,
     pub components: Vec<Component>,
+    /// The frame it sits inside, which draws its body and keeps its room,
+    /// so that the two curve into each other.
+    pub frame: Option<Frame>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -158,7 +276,10 @@ impl Shell {
     fn place(&self, output: OutputId, surface: SurfaceId, size: (f32, f32)) -> Option<Place> {
         let monitor = self.monitors.get(&output)?;
         let (out, config) = (&monitor.output, &monitor.config);
-        let panel = monitor.screen.panels.get(surface.0)?;
+        let pieces = monitor.screen.pieces(out.size);
+        let Some(Piece::Panel(panel)) = pieces.get(surface.0).copied() else {
+            return None;
+        };
         let side = match (panel.orientation, panel.anchor) {
             (Orientation::Horizontal, Anchor::Bottom) => Side::Above,
             (Orientation::Horizontal, _) => Side::Below,
@@ -170,15 +291,7 @@ impl Shell {
             Orientation::Horizontal => (panel.size(out.size).0, size.0),
             Orientation::Vertical => (panel.size(out.size).1, size.1),
         };
-        // The bar's far corners, at either end of the edge the card hangs
-        // from.
-        let r = panel.edges.radii;
-        let (first, last) = match panel.side() {
-            Side::Below => (r[3], r[2]),
-            Side::Above => (r[0], r[1]),
-            Side::Right => (r[1], r[2]),
-            Side::Left => (r[0], r[3]),
-        };
+        let (first, last) = panel.far_corners();
         let (lo, hi) = (
             panel.room() + first + room,
             length - panel.room() - last - room - card,
@@ -217,13 +330,13 @@ impl Shell {
         Some(Place { frame, dock, spec })
     }
 
-    /// The figures come after a monitor's panels in its list of surfaces.
+    /// The figures come after all of a monitor's other surfaces.
     fn is_hud(&self, on: On) -> bool {
         match on {
             On::Surface(out, SurfaceId(si)) => self
                 .monitors
                 .get(&out)
-                .is_some_and(|m| self.hud_shown(m) && si == m.screen.panels.len()),
+                .is_some_and(|m| self.hud_shown(m) && si == m.screen.pieces(m.output.size).len()),
             On::Popup => false,
         }
     }
@@ -285,10 +398,13 @@ fn layout(config: Config) -> Screen {
             border: config.border,
         },
         components: vec![Component::Logo],
+        frame: Frame::new(&config),
     };
     panel.edges = panel.edges.fit(bar.thickness, panel.side());
     Screen {
+        frame: panel.frame,
         panels: vec![panel],
+        corners: config.corners,
     }
 }
 
@@ -337,6 +453,40 @@ impl Panel {
         }
     }
 
+    /// How far in from the monitor's edges the frame puts it: by the
+    /// frame's width when a gap keeps it off the frame, and not at all
+    /// without a gap, where it takes the frame's place along its edge.
+    pub fn inset(&self) -> f32 {
+        self.frame
+            .filter(|_| self.gap > 0.0)
+            .map_or(0.0, |f| f.width)
+    }
+
+    /// How far in from its ends, along its far side, what hangs from it
+    /// stops: past its rounded corners there, or, spanning a frame, past the
+    /// frame's sides and the curves into them, which a gap keeps to half its
+    /// width, as [`frame::Layout`] does. In the order along the edge, as the
+    /// monitor counts along it.
+    pub fn far_corners(&self) -> (f32, f32) {
+        if let Some(f) = self.frame
+            && self.spans()
+        {
+            let end = if self.gap > 0.0 {
+                f.inverse_radius.min(self.gap / 2.0)
+            } else {
+                f.inverse_radius + f.width
+            };
+            return (end, end);
+        }
+        let r = self.edges.radii;
+        match self.side() {
+            Side::Below => (r[3], r[2]),
+            Side::Above => (r[0], r[1]),
+            Side::Right => (r[1], r[2]),
+            Side::Left => (r[0], r[3]),
+        }
+    }
+
     pub fn content(&self) -> f32 {
         let lengths: f32 = self.components.iter().map(|c| c.length()).sum();
         let gaps = GAP * self.components.len().saturating_sub(1) as f32;
@@ -345,9 +495,10 @@ impl Panel {
 
     /// The surface's size: the panel, and the room for its concave corners.
     pub fn size(&self, screen: (f32, f32)) -> (f32, f32) {
+        let inside = 2.0 * self.inset();
         let length = match (self.spans(), self.orientation) {
-            (true, Orientation::Horizontal) => screen.0,
-            (true, Orientation::Vertical) => screen.1,
+            (true, Orientation::Horizontal) => screen.0 - inside,
+            (true, Orientation::Vertical) => screen.1 - inside,
             (false, _) => self.length.unwrap_or_else(|| self.content()) + 2.0 * self.room(),
         };
         match self.orientation {
@@ -357,26 +508,24 @@ impl Panel {
     }
 
     /// Where the compositor puts the panel's surface on the monitor, as its
-    /// top-left corner: against its edge, past its gap, and centred along it
-    /// as wlroots centres a surface anchored to one edge, in whole pixels.
-    /// Another program's surface keeping room on the same edge would move
-    /// the panel without this knowing.
+    /// top-left corner: against its edge, past its gap and the frame, and
+    /// centred along it as wlroots centres a surface anchored to one edge,
+    /// in whole pixels. Another program's surface keeping room on the same
+    /// edge would move the panel without this knowing.
     pub fn origin(&self, screen: (f32, f32)) -> (f32, f32) {
         let (w, h) = self.size(screen);
         let (w, h) = (w as u32 as i32, h as u32 as i32);
         let (sw, sh) = (screen.0 as i32, screen.1 as i32);
         let centre = |total: i32, length: i32| ((total - length) / 2) as f32;
         let (x, y) = (centre(sw, w), centre(sh, h));
-        let g = self.gap;
-        match (self.anchor, self.spans()) {
-            (Anchor::Top, true) | (Anchor::Left, true) => (0.0, 0.0),
-            (Anchor::Top, false) => (x, g),
-            (Anchor::Bottom, true) => (0.0, (sh - h) as f32 - g),
-            (Anchor::Bottom, false) => (x, (sh - h) as f32 - g),
-            (Anchor::Left, false) => (g, y),
-            (Anchor::Right, true) => ((sw - w) as f32 - g, 0.0),
-            (Anchor::Right, false) => ((sw - w) as f32 - g, y),
-            (Anchor::Center, _) => (x, y),
+        let (i, g) = (self.inset(), self.gap);
+        let g = i + g;
+        match self.anchor {
+            Anchor::Top => (x, g),
+            Anchor::Bottom => (x, (sh - h) as f32 - g),
+            Anchor::Left => (g, y),
+            Anchor::Right => ((sw - w) as f32 - g, y),
+            Anchor::Center => (x, y),
         }
     }
 
@@ -401,17 +550,20 @@ impl Panel {
             (false, _) => (edge, (w as u32, h as u32)),
         };
         // The compositor adds the margin to the room the panel reserves.
-        let exclusive = if self.along_edge() {
-            self.thickness as i32
-        } else {
-            0
+        // Inside a frame, the frame's rooms keep it, and the panel keeps none,
+        // so that no room another surface keeps first can move it.
+        let exclusive = match (self.frame, self.along_edge()) {
+            (Some(_), _) => -1,
+            (None, true) => self.thickness as i32,
+            (None, false) => 0,
         };
-        let g = self.gap as i32;
+        let g = (self.gap + self.inset()) as i32;
+        let ends = if self.spans() { self.inset() as i32 } else { 0 };
         let margin = match self.anchor {
-            Anchor::Top => (g, 0, 0, 0),
-            Anchor::Right => (0, g, 0, 0),
-            Anchor::Bottom => (0, 0, g, 0),
-            Anchor::Left => (0, 0, 0, g),
+            Anchor::Top => (g, ends, 0, ends),
+            Anchor::Right => (ends, g, ends, 0),
+            Anchor::Bottom => (0, ends, g, ends),
+            Anchor::Left => (ends, 0, ends, g),
             Anchor::Center => (0, 0, 0, 0),
         };
         SurfaceSpec {
@@ -422,6 +574,9 @@ impl Panel {
             exclusive,
             margin,
             input: true,
+            // Inside a frame, its body is part of the frame's shape, which
+            // the CPU draws.
+            gpu: self.frame.is_none(),
         }
     }
 
@@ -431,16 +586,18 @@ impl Panel {
             Orientation::Horizontal => (Point::new(room, 0.0), Point::new(size.0 - room, size.1)),
             Orientation::Vertical => (Point::new(0.0, room), Point::new(size.0, size.1 - room)),
         };
-        hang::draw(
-            scene,
-            [p0, p1],
-            self.side(),
-            self.hangs(),
-            self.edges,
-            0.0,
-            t.surface,
-            t.outline,
-        );
+        if self.frame.is_none() {
+            hang::draw(
+                scene,
+                [p0, p1],
+                self.side(),
+                self.hangs(),
+                self.edges,
+                0.0,
+                t.surface,
+                t.outline,
+            );
+        }
         let mut along = room + END;
         for c in &self.components {
             let middle = along + c.length() / 2.0;
@@ -499,7 +656,7 @@ impl App for Shell {
             self.monitors.insert(out.id, monitor);
         }
         let monitor = &self.monitors[&out.id];
-        let mut surfaces: Vec<_> = (monitor.screen.panels.iter())
+        let mut surfaces: Vec<_> = (monitor.screen.pieces(out.size).iter())
             .map(|p| p.surface(out.size))
             .collect();
         if self.hud_shown(monitor) {
@@ -512,8 +669,29 @@ impl App for Shell {
         let Some(monitor) = self.monitors.get(&out) else {
             return;
         };
-        if let Some(panel) = monitor.screen.panels.get(surface.0) {
-            panel.draw(paint.scene, paint.size, &self.theme);
+        let screen = &monitor.screen;
+        let size = monitor.output.size;
+        if let Some(piece) = screen.pieces(size).get(surface.0) {
+            let layout = screen.layout(size);
+            let frame = |scene: &mut Scene, tiles: &[Tile], origin: Point| {
+                if let (Some(l), Some(f)) = (&layout, &screen.frame) {
+                    frame::draw(scene, &l.rim, tiles, origin, f, &self.theme);
+                }
+            };
+            match piece {
+                Piece::Tile(tile) => frame(paint.scene, &[*tile], tile.rect[0]),
+                Piece::Panel(p) => {
+                    if let Some(l) = &layout {
+                        let (x, y) = p.origin(size);
+                        frame(paint.scene, &l.bar, Point::new(x, y));
+                    }
+                    p.draw(paint.scene, paint.size, &self.theme);
+                }
+                Piece::Room(..) => {}
+                Piece::Corner(toward, c) => {
+                    frame::corner(paint.scene, *toward, paint.size.0, c.color);
+                }
+            }
         } else if self.is_hud(On::Surface(out, surface)) {
             let output = monitor.output.clone();
             self.hud
@@ -1102,6 +1280,241 @@ mod tests {
         assert_eq!(card(&shell).1, 30, "{:?}", card(&shell));
     }
 
+    /// The shapes on DP-1's surface `si`, as the shell draws them.
+    fn drawn(shell: &mut Shell, si: usize) -> Scene {
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        let mut scene = Scene::new();
+        let size = match specs[si].size {
+            (0, h) => (1920.0, h as f32),
+            (w, 0) => (w as f32, 1080.0),
+            (w, h) => (w as f32, h as f32),
+        };
+        let mut paint = Paint {
+            scene: &mut scene,
+            size,
+            scale: 1.0,
+            time: Instant::now(),
+        };
+        shell.draw(OutputId(1), SurfaceId(si), &mut paint);
+        scene
+    }
+
+    fn covered(scene: &Scene, x: f32, y: f32) -> bool {
+        scene
+            .shapes
+            .iter()
+            .any(|s| s.distance(Point::new(x, y)) < 0.0)
+    }
+
+    fn names(shell: &mut Shell) -> Vec<&'static str> {
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        specs.iter().map(|s| s.name).collect()
+    }
+
+    fn layout(text: &str) -> frame::Layout {
+        let shell = shell_on_dp1(text);
+        let screen = &shell.monitor(OutputId(1)).unwrap().screen;
+        screen.layout((1920.0, 1080.0)).unwrap()
+    }
+
+    /// Whether the frame with the bar is solid at `x`, `y` on the monitor.
+    fn solid(l: &frame::Layout, x: f32, y: f32) -> bool {
+        l.rim.distance(Point::new(x, y)) < 0.0
+    }
+
+    /// The point of drawing the frame in tiles: none drawn twice, which a
+    /// translucent colour would show, and none left out.
+    #[test]
+    fn the_frame_s_tiles_never_overlap_and_cover_all_of_it() {
+        for text in [
+            "return { frame = { width = 8, inverse_radius = 16 } }",
+            "return { bar = { gap = 6 }, frame = { width = 8, inverse_radius = 16 } }",
+            "return { bar = { length = 1000, inverse_radius = 14 }, frame = { width = 8 } }",
+            "return { bar = { length = 1000, gap = 4 }, frame = { width = 8 } }",
+            "return { bar = { orientation = Orientation.Vertical }, \
+             frame = { width = 10, inverse_radius = 12 } }",
+            "return { frame = { inverse_radius = 20 } }",
+            "return { bar = { length = 1536, thickness = 32 }, \
+             frame = { width = 32, inverse_radius = 10 } }",
+            "return { bar = { length = 1000, thickness = 20, inverse_radius = 6 }, \
+             frame = { width = 32, inverse_radius = 10 } }",
+            "return { bar = { length = 1000, gap = 4 }, frame = { width = 8, inverse_radius = 30 } }",
+            "return { bar = { length = 1900, inverse_radius = 4 }, \
+             frame = { width = 8, inverse_radius = 30 } }",
+        ] {
+            let l = layout(text);
+            let rects: Vec<_> = l.tiles.iter().chain(&l.bar).map(|t| t.rect).collect();
+            for (i, a) in rects.iter().enumerate() {
+                for b in &rects[i + 1..] {
+                    let w = a[1].x.min(b[1].x) - a[0].x.max(b[0].x);
+                    let h = a[1].y.min(b[1].y) - a[0].y.max(b[0].y);
+                    assert!(w <= 0.0 || h <= 0.0, "{text}: {a:?} and {b:?} overlap");
+                }
+            }
+            for y in (0..1080).step_by(3) {
+                for x in (0..1920).step_by(3) {
+                    let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+                    if solid(&l, x, y) {
+                        let inside = |r: &[Point; 2]| {
+                            (r[0].x..r[1].x).contains(&x) && (r[0].y..r[1].y).contains(&y)
+                        };
+                        assert!(rects.iter().any(inside), "{text}: ({x}, {y}) in no tile");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_frame_s_tiles_come_first_keep_no_room_and_stay_on_the_cpu() {
+        let mut shell = shell_on_dp1("return { frame = { width = 8 } }");
+        let names = names(&mut shell);
+        assert_eq!(
+            names,
+            [
+                "frame", "frame", "frame", "panel", "room", "room", "room", "room", "hud"
+            ]
+        );
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        // The bottom, under the bar along the top: its whole width.
+        let bottom = &specs[0];
+        assert_eq!(bottom.anchor, engine::Anchor::TOP | engine::Anchor::LEFT);
+        assert_eq!((bottom.size, bottom.margin), ((1920, 8), (1072, 0, 0, 0)));
+        for s in specs.iter().filter(|s| s.name != "hud") {
+            assert!(!s.gpu, "{}", s.name);
+        }
+        for s in specs.iter().filter(|s| s.name == "frame") {
+            assert_eq!((s.exclusive, s.input), (-1, false));
+        }
+        // Without a gap, at the monitor's edge in the frame's place,
+        // keeping no room itself.
+        let bar = &specs[3];
+        assert_eq!(
+            (bar.size, bar.exclusive, bar.margin),
+            ((0, 44), -1, (0, 0, 0, 0))
+        );
+        let rooms: Vec<_> = specs[4..8]
+            .iter()
+            .map(|s| (s.anchor, s.exclusive))
+            .collect();
+        let (t, r, b, l) = (
+            engine::Anchor::TOP,
+            engine::Anchor::RIGHT,
+            engine::Anchor::BOTTOM,
+            engine::Anchor::LEFT,
+        );
+        assert_eq!(rooms, [(t, 44), (r, 8), (b, 8), (l, 8)]);
+    }
+
+    #[test]
+    fn with_a_gap_the_bar_sits_inside_the_frame() {
+        let mut shell = shell_on_dp1("return { bar = { gap = 6 }, frame = { width = 8 } }");
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        let bar = specs.iter().find(|s| s.name == "panel").unwrap();
+        assert_eq!(bar.margin, (14, 8, 0, 8));
+        let room = specs.iter().find(|s| s.name == "room").unwrap();
+        assert_eq!((room.anchor, room.exclusive), (engine::Anchor::TOP, 58));
+    }
+
+    #[test]
+    fn the_corners_are_on_the_overlay_layer_and_as_large_as_a_corner() {
+        let mut shell = shell_on_dp1("return { corners = { radius = 12 } }");
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        let corners: Vec<_> = specs.iter().filter(|s| s.name == "corner").collect();
+        assert_eq!(corners.len(), 4);
+        for c in &corners {
+            let got = (c.layer, c.size, c.exclusive, c.input, c.gpu);
+            assert_eq!(got, (Layer::Overlay, (12, 12), -1, false, false));
+        }
+        // Without a frame, the bar keeps its room itself, and draws itself.
+        assert_eq!((specs[0].name, specs[0].exclusive), ("panel", 44));
+        // The corner at the top left: black at the monitor's corner, nothing
+        // inside the curve.
+        let si = specs.iter().position(|s| s.name == "corner").unwrap();
+        let scene = drawn(&mut shell, si);
+        assert!(covered(&scene, 0.5, 0.5) && !covered(&scene, 11.0, 11.0));
+    }
+
+    #[test]
+    fn the_frame_runs_along_every_edge() {
+        let l = layout("return { frame = { width = 8 } }");
+        assert!(solid(&l, 4.0, 500.0) && !solid(&l, 12.0, 500.0));
+        assert!(solid(&l, 1916.0, 500.0) && solid(&l, 900.0, 1076.0));
+        // Square inside, at the bottom left.
+        assert!(!solid(&l, 9.0, 1071.0));
+    }
+
+    #[test]
+    fn the_frame_s_inside_corners_curve_with_its_inverse_radius() {
+        let text = "return { bar = { length = 1000 }, frame = { width = 8, inverse_radius = 16 } }";
+        let l = layout(text);
+        // At the bottom left, and at the top left beside the shorter bar.
+        assert!(solid(&l, 9.0, 1071.0) && !solid(&l, 8.0 + 16.0, 1072.0 - 16.0));
+        assert!(solid(&l, 9.0, 9.0) && !solid(&l, 8.0 + 16.0, 8.0 + 16.0));
+    }
+
+    #[test]
+    fn each_tile_draws_its_own_part_where_it_is() {
+        let mut shell = shell_on_dp1("return { frame = { width = 8 } }");
+        // The left side, under the bar: from 44 down to the bottom side.
+        let specs = shell.surfaces(&output(1, "DP-1"));
+        let si = specs
+            .iter()
+            .position(|s| s.name == "frame" && s.margin == (44, 0, 0, 0))
+            .unwrap();
+        assert_eq!(specs[si].size, (8, 1080 - 44 - 8));
+        let scene = drawn(&mut shell, si);
+        assert!(covered(&scene, 4.0, 10.0) && !covered(&scene, 9.0, 10.0));
+    }
+
+    #[test]
+    fn a_bar_that_spans_the_frame_curves_into_it_below() {
+        let l = layout("return { frame = { width = 8, inverse_radius = 16 } }");
+        // The bar's body, in the frame's place along the top.
+        assert!(solid(&l, 500.0, 30.0) && !solid(&l, 500.0, 46.0));
+        // Where its far side meets the frame's left side.
+        assert!(solid(&l, 9.0, 45.0));
+        assert!(!solid(&l, 8.0 + 16.0, 44.0 + 16.0));
+        // The bar's own surface draws its part, the whole of it in the
+        // bar's colour.
+        assert_eq!(l.bar.len(), 1);
+        assert!(l.bar[0].bar);
+    }
+
+    #[test]
+    fn a_shorter_bar_hangs_from_the_frame_with_its_own_curves() {
+        let text = "return { bar = { length = 600, inverse_radius = 14 }, frame = { width = 8 } }";
+        let l = layout(text);
+        // The bar from 660 to 1260, 44 from the monitor's edge, and the
+        // frame's top side running on beside it.
+        assert!(solid(&l, 900.0, 30.0) && solid(&l, 300.0, 4.0));
+        assert!(!solid(&l, 300.0, 12.0));
+        // Curving out into the frame at its ends, in the frame's colour.
+        assert!(solid(&l, 659.0, 9.0));
+        assert!(!solid(&l, 659.0 - 14.0, 8.0 + 14.0));
+        let colours: Vec<_> = l.bar.iter().map(|t| t.bar).collect();
+        assert_eq!(colours, [false, true, false]);
+    }
+
+    #[test]
+    fn the_settings_hang_from_the_bar_in_the_frame() {
+        let open = |text: &str| {
+            let mut shell = shell_on_dp1(text);
+            let si = names(&mut shell)
+                .iter()
+                .position(|n| *n == "panel")
+                .unwrap();
+            let bar = On::Surface(OutputId(1), SurfaceId(si));
+            shell.pressed(bar, (400.0, 20.0), Button::Right);
+            play(&mut shell, 1.0);
+            card(&shell).1
+        };
+        assert_eq!(open("return { frame = { width = 8 } }"), 44);
+        // Below the bar's far side, 8 + 6 + 44 down.
+        let gap = "return { bar = { gap = 6 }, frame = { width = 8 } }";
+        assert_eq!(open(gap), 58);
+    }
+
     /// The bar the settings `bar = { ... }` give a monitor 1920 wide.
     fn panel_from(bar: &str) -> Panel {
         let mut shell = shell_on_dp1(&format!("return {{ bar = {{ thickness = 44, {bar} }} }}"));
@@ -1187,6 +1600,7 @@ mod tests {
                 border: 0.0,
             },
             components: vec![Component::Logo, Component::Logo],
+            frame: None,
         };
         let spec = panel.surface((1920.0, 1080.0));
         // 84 is 8 + 32 + 4 + 32 + 8: both ends, two logos and the gap between them.

@@ -11,6 +11,7 @@ mod fillet;
 mod liquid;
 mod outline;
 mod rect;
+mod rim;
 mod rounded;
 mod text;
 
@@ -19,6 +20,7 @@ pub use fillet::Fillet;
 pub use liquid::Liquid;
 pub use outline::Outline;
 pub use rect::Rect;
+pub use rim::{Joined, Rim};
 pub use rounded::RoundedRect;
 pub use text::Text;
 
@@ -393,7 +395,7 @@ fn clipped(d: f32, [c0, c1]: [Point; 2], p: Point) -> f32 {
 /// and both backends are held to the same random scenes.
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use super::{Circle, Fillet, Liquid, Rect, RoundedRect, Shape, Text};
+    use super::{Circle, Fillet, Joined, Liquid, Rect, Rim, RoundedRect, Shape, Text};
     use crate::scene::{Point, Rgba};
 
     pub fn white() -> Rgba {
@@ -456,6 +458,45 @@ pub(crate) mod fixtures {
             center: Point::new(2.0, 8.0),
             r: 8.0,
             color: orange(),
+        }
+    }
+
+    /// A rim 4 wide round a box 60 by 40, with a box from 20 to 40 joined
+    /// into its top side, down to 14, as a bar into a frame.
+    pub fn rim() -> Rim {
+        Rim {
+            outer: [Point::new(0.0, 0.0), Point::new(60.0, 40.0)],
+            inner: [Point::new(4.0, 4.0), Point::new(56.0, 36.0)],
+            radii: [0.0, 0.0, 6.0, 6.0],
+            joined: Some(Joined {
+                p0: Point::new(20.0, 0.0),
+                p1: Point::new(40.0, 14.0),
+                radii: [0.0, 0.0, 3.0, 3.0],
+                blend: 3.0,
+            }),
+            inset: 0.0,
+            stroke: 0.0,
+            clip: [Point::new(0.0, 0.0), Point::new(60.0, 40.0)],
+            color: orange(),
+        }
+    }
+
+    /// Part of [`rim`], drawn a border's width in, as the fill inside a
+    /// border on one of the surfaces that share it.
+    pub fn rim_part() -> Rim {
+        Rim {
+            inset: 1.5,
+            clip: [Point::new(10.0, 0.0), Point::new(45.0, 25.0)],
+            ..rim()
+        }
+    }
+
+    /// The border round the same part.
+    pub fn rim_line() -> Rim {
+        Rim {
+            inset: 0.75,
+            stroke: 1.5,
+            ..rim_part()
         }
     }
 
@@ -654,7 +695,40 @@ pub(crate) mod fixtures {
             ],
             color,
         };
-        match (dice.roll() * 9.0) as u32 {
+        // A rim round the rectangle, its inner corners and a joined box no
+        // larger than they can be exact for.
+        let t = dice.between(0.5, most.max(0.5));
+        let (ih_x, ih_y) = ((dx - t).max(0.0), (dy - t).max(0.0));
+        let ir = ih_x.min(ih_y);
+        let a = dice.between(0.5, dx.max(0.5));
+        let deep = dice.between(t, 2.0 * dy.max(t));
+        let jr = a.min(deep / 2.0);
+        let rim = Rim {
+            outer: [rect.p0, rect.p1],
+            inner: [
+                Point::new(rect.p0.x + t, rect.p0.y + t),
+                Point::new(rect.p1.x - t, rect.p1.y - t),
+            ],
+            radii: [(); 4].map(|()| dice.between(0.0, ir)),
+            joined: (dice.roll() < 0.6).then(|| Joined {
+                p0: Point::new(x - a, rect.p0.y),
+                p1: Point::new(x + a, rect.p0.y + deep),
+                radii: [(); 4].map(|()| dice.between(0.0, jr)),
+                blend: dice.between(0.0, t),
+            }),
+            inset: dice.between(0.0, 2.0),
+            stroke: if dice.roll() < 0.5 {
+                0.0
+            } else {
+                dice.between(0.5, 3.0)
+            },
+            clip: [
+                Point::new(rect.p0.x - 1.0 + dice.between(0.0, dx), rect.p0.y - 1.0),
+                Point::new(rect.p1.x + 1.0 - dice.between(0.0, dx), rect.p1.y + 1.0),
+            ],
+            color,
+        };
+        match (dice.roll() * 11.0) as u32 {
             0 => Box::new(rect),
             1 => Box::new(circle),
             2 => Box::new(rect.outline(width, color)),
@@ -663,6 +737,7 @@ pub(crate) mod fixtures {
             5 => Box::new(rounded.outline(width, color)),
             6 => Box::new(liquid),
             7 => Box::new(liquid.outline(width, color)),
+            8 | 9 => Box::new(rim),
             _ => Box::new(fillet),
         }
     }
@@ -671,7 +746,8 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        circle, fillet, liquid, pulled, rounded, square, text, uneven, waves, white,
+        circle, fillet, liquid, pulled, rim, rim_line, rim_part, rounded, square, text, uneven,
+        waves, white,
     };
     use super::*;
 
@@ -738,6 +814,9 @@ mod tests {
         assert_bounds_enclose(&liquid());
         assert_bounds_enclose(&liquid().outline(1.5, white()));
         assert_bounds_enclose(&text());
+        assert_bounds_enclose(&rim());
+        assert_bounds_enclose(&rim_part());
+        assert_bounds_enclose(&rim_line());
         assert_bounds_enclose(&waves());
         assert_bounds_enclose(&pulled());
     }
@@ -780,6 +859,9 @@ mod tests {
         assert_stretches_hold(&liquid());
         assert_stretches_hold(&liquid().outline(1.5, white()));
         assert_stretches_hold(&text());
+        assert_stretches_hold(&rim());
+        assert_stretches_hold(&rim_part());
+        assert_stretches_hold(&rim_line());
         assert_stretches_hold(&waves());
         assert_stretches_hold(&pulled());
     }
@@ -851,12 +933,15 @@ mod tests {
         assert_sdf_matches(&liquid());
         assert_sdf_matches(&liquid().outline(1.5, white()));
         assert_sdf_matches(&text());
+        assert_sdf_matches(&rim());
+        assert_sdf_matches(&rim_part());
+        assert_sdf_matches(&rim_line());
         assert_sdf_matches(&waves());
         assert_sdf_matches(&pulled());
     }
 
     #[test]
-    fn the_gpu_draws_every_shape_but_text_and_an_outline_of_an_outline() {
+    fn the_gpu_draws_every_shape_but_text_a_rim_and_an_outline_of_an_outline() {
         assert!(square().sdf().is_some());
         assert!(circle().sdf().is_some());
         assert!(square().outline(3.0, white()).sdf().is_some());
@@ -874,5 +959,8 @@ mod tests {
                 .is_none()
         );
         assert!(text().sdf().is_none());
+        // Drawn on surfaces that are drawn once, for which the CPU is the
+        // cheaper.
+        assert!(rim().sdf().is_none());
     }
 }

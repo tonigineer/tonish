@@ -71,6 +71,7 @@ impl Hud {
             exclusive: 0,
             margin: (MARGIN, 0, 0, MARGIN),
             input: false,
+            gpu: true,
         }
     }
 

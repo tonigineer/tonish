@@ -5,6 +5,7 @@
 
 pub mod args;
 pub mod config;
+pub mod frame;
 pub mod hang;
 pub mod hud;
 pub mod ipc;

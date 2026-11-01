@@ -83,7 +83,7 @@ One setting stands above the sections and applies to the whole shell:
 |---|---|---|
 | `border` | The width of the line around the bar and every panel, in pixels. `0` draws none. One width for all of them, so that the bar's line always runs on round the panels that open from it: no line runs between a panel and the bar, and the bar's line turns into the panel's where they meet, round its concave corners or at a sharp one. On a bar that curves out into its edge, the line keeps its width round the curve and runs out into the edge. | `0` |
 
-The rest come in four sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), `animation` for how panels move, and `hud` for the [figures in the corner](running.md#the-figures-in-the-corner).
+The rest come in six sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), `animation` for how panels move, `hud` for the [figures in the corner](running.md#the-figures-in-the-corner), `frame` for a frame round the monitor, and `corners` for the monitor's own corners.
 
 | `bar` | Values | Default |
 |---|---|---|
@@ -123,6 +123,19 @@ Most motions are springs, set by two numbers. `stiffness`, at least 1, sets how 
 |---|---|---|
 | `show` | `true` shows the [figures in the corner](running.md#the-figures-in-the-corner) on the monitor, `false` hides them. `tonish msg hud` hides or shows them on every monitor until the next save that changes `show`. | `true` |
 
+| `frame` | Values | Default |
+|---|---|---|
+| `width` | How wide the frame is along every edge of the monitor, in pixels. Windows keep clear of it. A bar without a `gap` takes the frame's place along its edge, and the frame's sides come out of it; with a gap, the bar sits inside the frame, the gap away from it. `0` leaves out the sides, and only the frame's curved corners show. [`corners`](#the-settings) rounds the monitor's own corners, outside the frame. | `0` |
+| `inverse_radius` | How round the frame's inside corners are, in pixels, where windows meet it: where two of its sides meet, and where it meets a bar that spans the monitor. Beside a bar with a `gap`, the curves are at most half the gap. A shorter bar curves into the frame with the bar's own `inverse_radius`, as it curves into the monitor's edge without a frame. | `0` |
+| `color` | The colour of the frame and its curves into the bar, as `"#rrggbb"`, or `"#rrggbbaa"` with its opacity, as CSS writes them. The bar keeps the theme's colour. | `"#111318"` |
+
+With `width` and `inverse_radius` both at 0 there is no frame. With either set, the frame draws the bar's body too, so that the two curve into each other, and a `border` runs on round both without a break.
+
+| `corners` | Values | Default |
+|---|---|---|
+| `radius` | How round the monitor's own corners are, in pixels, over everything on it: the frame, the bar, and fullscreen windows too. `0` leaves them square. | `0` |
+| `color` | What shows outside the curve, as `"#rrggbb"` or `"#rrggbbaa"`. | `"#000000"` |
+
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 
 ## The settings panel
@@ -157,7 +170,8 @@ A monitor that appears while tonish runs, and that the file fails for, gets the 
 - **A setting outside its section**, such as `thickness` outside `bar`, is an error, which names the sections.
 - **A value of the wrong kind** is an error, such as `orientation = 2`, `thickness = "wide"`, or a `radius` with a corner `top`.
 - **A thickness under 1, or a length between 0 and 1,** is an error. The compositor would end tonish's connection for a bar 0 pixels thick or long.
-- **A negative gap, radius, inverse radius, border, `max_fps`, `kick`, `amount`, `height` or `duration`, or a negative `detaching.thickness`,** is an error.
+- **A negative gap, width, radius, inverse radius, border, `max_fps`, `kick`, `amount`, `height` or `duration`, or a negative `detaching.thickness`,** is an error.
+- **A colour that isn't `#rrggbb` or `#rrggbbaa`**, such as `"red"`, is an error.
 - **A spring that would never move or never stop**, with a `stiffness` under 1 or a `damping` under 0.05, is an error. So is a `detaching.distance` under 20 pixels, where the neck starts, or a `pull` outside 0 to 0.9: at 1 the bar would hold the panel for good.
 
 At start, a broken file is an error that ends tonish: it prints what's wrong and exits with 1.
