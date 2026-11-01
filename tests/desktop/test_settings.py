@@ -31,3 +31,22 @@ def test_a_broken_edit_keeps_the_panel(desktop):
     )
     assert desktop.tonish.poll() is None
     assert desktop.workspaces() == before
+
+
+def edit(desktop, text):
+    """The panel's settings, on top of the default orientation and thickness."""
+    desktop.wait_for_panels()
+    desktop.settings.write_text(f'orientation = "horizontal"\nthickness = 44\n{text}\n')
+    assert wait_for(lambda: "settings changed" in desktop.logged()), desktop.logged()
+
+
+def test_a_gap_keeps_the_panel_off_its_edge_and_adds_to_its_room(desktop):
+    edit(desktop, "gap = 10")
+    want = [(0, 54, 1920, 1080 - 54)] * 2
+    assert wait_for(lambda: desktop.workspaces() == want), desktop.workspaces()
+
+
+def test_a_shorter_panel_keeps_its_room(desktop):
+    edit(desktop, "length = 600\nradius = 12")
+    want = [(0, 44, 1920, 1080 - 44)] * 2
+    assert wait_for(lambda: desktop.workspaces() == want), desktop.workspaces()

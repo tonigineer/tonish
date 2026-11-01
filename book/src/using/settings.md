@@ -12,6 +12,9 @@ To get the defaults back, delete the file; tonish writes it again on its next st
 |---|---|---|
 | `orientation` | `"horizontal"` puts the panel along the top of every monitor, `"vertical"` down the left. | `"horizontal"` |
 | `thickness` | The panel's thickness in pixels, at least 1. | `44` |
+| `length` | The panel's length along its edge in pixels, `0` or at least 1. `0` spans the whole monitor; a shorter panel sits in the middle of the edge. Windows keep clear of the edge's whole length either way. | `0` |
+| `gap` | How far the panel keeps from its edge, in pixels. Windows keep clear of the gap too. | `0` |
+| `radius` | How round the panel's corners are, in pixels. More than half the thickness counts as half. Where a panel shorter than the monitor touches its edge, its corners there curve out into the edge instead, so that the panel hangs from it. | `0` |
 
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 
@@ -36,9 +39,10 @@ thickness 0 is less than 1 pixel
 ## What counts as broken
 
 - **A misspelt setting** is an error, not ignored without a word.
-- **A missing setting** is an error. Every setting has to be in the file.
+- **A missing `orientation` or `thickness`** is an error. The other settings take their defaults when they're missing, so a file from before they existed still works.
 - **A value of the wrong kind** is an error, such as `orientation = "diagonal"`.
-- **A thickness under 1** is an error. The compositor would end tonish's connection for a panel 0 pixels thick.
+- **A thickness under 1, or a length between 0 and 1,** is an error. The compositor would end tonish's connection for a panel 0 pixels thick or long.
+- **A negative gap or radius** is an error.
 
 At start, a broken file is an error that ends tonish: it prints what's wrong and exits with 1.
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config};
+use crate::hang;
 use crate::ipc::{self, Message};
 use crate::settings;
 use crate::theme::Theme;
@@ -9,7 +10,7 @@ use engine::{
     self, App, Button, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
     SurfaceId, SurfaceSpec,
 };
-use renderer::{Circle, Point, Rect, Scene, Shape};
+use renderer::{Circle, Point, RoundedRect, Scene, Shape};
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
@@ -44,6 +45,13 @@ pub struct Panel {
     pub orientation: Orientation,
     /// Logical pixels across the panel.
     pub thickness: f32,
+    /// Logical pixels along the panel. `None` spans the monitor along an
+    /// edge, and fits the components anywhere else.
+    pub length: Option<f32>,
+    /// Logical pixels between the panel and its edge.
+    pub gap: f32,
+    /// Of the panel's corners, logical pixels, at most half the thickness.
+    pub radius: f32,
     pub components: Vec<Component>,
 }
 
@@ -140,9 +148,8 @@ impl Shell {
 }
 
 /// The layout stays in code until the settings file describes it; the file
-/// only picks the orientation and thickness of the one panel. Each
-/// orientation goes to an edge it spans the monitor along, so that the panel
-/// reserves its room and windows stay clear of it.
+/// only shapes the one panel. Each orientation goes to an edge it lies
+/// along, so that the panel reserves its room and windows stay clear of it.
 fn layout(config: Config) -> Vec<Screen> {
     let anchor = match config.orientation {
         Orientation::Horizontal => Anchor::Top,
@@ -154,18 +161,50 @@ fn layout(config: Config) -> Vec<Screen> {
             anchor,
             orientation: config.orientation,
             thickness: config.thickness,
+            length: (config.length > 0.0).then_some(config.length),
+            gap: config.gap,
+            // More would make the corners of either end overlap.
+            radius: config.radius.min(config.thickness / 2.0),
             components: vec![Component::Logo],
         }],
     }]
 }
 
 impl Panel {
-    pub fn spans(&self) -> bool {
+    /// Along the edge it is anchored to, as a bar is, rather than across
+    /// it or in the middle of the monitor. Only such a panel reserves room,
+    /// because layer-shell only lets a surface anchored to an edge do so.
+    pub fn along_edge(&self) -> bool {
         match self.anchor {
             Anchor::Top | Anchor::Bottom => self.orientation == Orientation::Horizontal,
             Anchor::Left | Anchor::Right => self.orientation == Orientation::Vertical,
             Anchor::Center => false,
         }
+    }
+
+    pub fn spans(&self) -> bool {
+        self.along_edge() && self.length.is_none()
+    }
+
+    /// Touching its edge without spanning it, so that its corners there
+    /// curve out into the edge.
+    pub fn hangs(&self) -> bool {
+        self.along_edge() && !self.spans() && self.gap == 0.0 && self.radius > 0.0
+    }
+
+    /// The side of its edge the panel is on.
+    fn side(&self) -> Side {
+        match (self.anchor, self.orientation) {
+            (Anchor::Bottom, _) => Side::Above,
+            (Anchor::Right, _) => Side::Left,
+            (Anchor::Left, _) | (Anchor::Center, Orientation::Vertical) => Side::Right,
+            (Anchor::Top, _) | (Anchor::Center, Orientation::Horizontal) => Side::Below,
+        }
+    }
+
+    /// Room at each end of the surface for the concave corners.
+    fn room(&self) -> f32 {
+        if self.hangs() { self.radius } else { 0.0 }
     }
 
     pub fn content(&self) -> f32 {
@@ -174,11 +213,12 @@ impl Panel {
         END + lengths + gaps + END
     }
 
+    /// The surface's size: the panel, and the room for its concave corners.
     pub fn size(&self, screen: (f32, f32)) -> (f32, f32) {
         let length = match (self.spans(), self.orientation) {
             (true, Orientation::Horizontal) => screen.0,
             (true, Orientation::Vertical) => screen.1,
-            (false, _) => self.content(),
+            (false, _) => self.length.unwrap_or_else(|| self.content()) + 2.0 * self.room(),
         };
         match self.orientation {
             Orientation::Horizontal => (length, self.thickness),
@@ -201,10 +241,24 @@ impl Panel {
             Anchor::Center => engine::Anchor::empty(),
         };
         let (w, h) = self.size(screen);
-        let (anchor, size, exclusive) = match (self.spans(), self.orientation) {
-            (true, Orientation::Horizontal) => (edge | l | r, (0, h as u32), h as i32),
-            (true, Orientation::Vertical) => (edge | t | b, (w as u32, 0), w as i32),
-            (false, _) => (edge, (w as u32, h as u32), 0),
+        let (anchor, size) = match (self.spans(), self.orientation) {
+            (true, Orientation::Horizontal) => (edge | l | r, (0, h as u32)),
+            (true, Orientation::Vertical) => (edge | t | b, (w as u32, 0)),
+            (false, _) => (edge, (w as u32, h as u32)),
+        };
+        // The compositor adds the margin to the room the panel reserves.
+        let exclusive = if self.along_edge() {
+            self.thickness as i32
+        } else {
+            0
+        };
+        let g = self.gap as i32;
+        let margin = match self.anchor {
+            Anchor::Top => (g, 0, 0, 0),
+            Anchor::Right => (0, g, 0, 0),
+            Anchor::Bottom => (0, 0, g, 0),
+            Anchor::Left => (0, 0, 0, g),
+            Anchor::Center => (0, 0, 0, 0),
         };
         SurfaceSpec {
             name: "panel",
@@ -212,17 +266,27 @@ impl Panel {
             anchor,
             size,
             exclusive,
-            margin: (0, 0, 0, 0),
+            margin,
         }
     }
 
     pub fn draw(&self, scene: &mut Scene, size: (f32, f32), t: &Theme) {
-        scene.push(Rect {
-            p0: Point::new(0.0, 0.0),
-            p1: Point::new(size.0, size.1),
-            color: t.surface,
-        });
-        let mut along = END;
+        let room = self.room();
+        let (p0, p1) = match self.orientation {
+            Orientation::Horizontal => (Point::new(room, 0.0), Point::new(size.0 - room, size.1)),
+            Orientation::Vertical => (Point::new(0.0, room), Point::new(size.0, size.1 - room)),
+        };
+        if self.hangs() {
+            hang::draw(scene, [p0, p1], self.side(), self.radius, t.surface);
+        } else {
+            scene.push(RoundedRect {
+                p0,
+                p1,
+                r: self.radius,
+                color: t.surface,
+            });
+        }
+        let mut along = room + END;
         for c in &self.components {
             let middle = along + c.length() / 2.0;
             let center = match self.orientation {
@@ -422,6 +486,7 @@ mod tests {
         let vertical = Config {
             orientation: Orientation::Vertical,
             thickness: 30.0,
+            ..Config::default()
         };
         let mut shell = shell_on_dp1(vertical);
         shell.pressed(bar(), (12.0, 300.0), Button::Right);
@@ -502,6 +567,64 @@ mod tests {
         assert!(p0.x <= c0.x && p0.y <= 0.0 && p1.x >= c1.x && p1.y >= h as f32);
     }
 
+    fn panel_from(text: &str) -> Panel {
+        let config = config::parse(&format!(
+            "orientation = \"horizontal\"\nthickness = 44\n{text}"
+        ));
+        Shell::new(config.unwrap())
+            .screens
+            .remove(0)
+            .panels
+            .remove(0)
+    }
+
+    #[test]
+    fn a_shorter_panel_sits_in_the_middle_of_its_edge_and_keeps_its_room() {
+        let spec = panel_from("length = 600").surface((1920.0, 1080.0));
+        assert_eq!(spec.anchor, engine::Anchor::TOP);
+        assert_eq!((spec.size, spec.exclusive), ((600, 44), 44));
+    }
+
+    #[test]
+    fn a_gap_is_a_margin_on_the_panels_edge() {
+        let spec = panel_from("gap = 8").surface((1920.0, 1080.0));
+        assert_eq!((spec.margin, spec.exclusive), ((8, 0, 0, 0), 44));
+    }
+
+    #[test]
+    fn a_shorter_panel_on_its_edge_makes_room_for_its_concave_corners() {
+        let hanging = panel_from("length = 600\nradius = 12");
+        assert!(hanging.hangs());
+        assert_eq!(hanging.surface((1920.0, 1080.0)).size, (624, 44));
+        let mut scene = Scene::new();
+        hanging.draw(&mut scene, (624.0, 44.0), &Theme::builtin());
+        let fillets = scene
+            .shapes
+            .iter()
+            .filter(|s| s.sdf().is_some_and(|f| f.cut_radius > 0.0));
+        assert_eq!(fillets.count(), 2);
+    }
+
+    #[test]
+    fn a_panel_off_its_edge_or_spanning_it_has_no_concave_corners() {
+        for text in ["length = 600\nradius = 12\ngap = 8", "radius = 12"] {
+            let panel = panel_from(text);
+            assert!(!panel.hangs(), "{text}");
+            let mut scene = Scene::new();
+            panel.draw(&mut scene, (600.0, 44.0), &Theme::builtin());
+            let cut = scene
+                .shapes
+                .iter()
+                .any(|s| s.sdf().is_some_and(|f| f.cut_radius > 0.0));
+            assert!(!cut, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_radius_is_at_most_half_the_thickness() {
+        assert_eq!(panel_from("radius = 100").radius, 22.0);
+    }
+
     #[test]
     fn by_default_a_panel_lies_along_the_top_keeping_its_room() {
         let mut shell = Shell::default();
@@ -525,12 +648,18 @@ mod tests {
                     anchor: Anchor::Left,
                     orientation: Orientation::Vertical,
                     thickness: 44.0,
+                    length: None,
+                    gap: 0.0,
+                    radius: 0.0,
                     components: vec![Component::Logo],
                 },
                 Panel {
                     anchor: Anchor::Center,
                     orientation: Orientation::Horizontal,
                     thickness: 32.0,
+                    length: None,
+                    gap: 0.0,
+                    radius: 0.0,
                     components: vec![Component::Logo, Component::Logo],
                 },
             ],

@@ -28,6 +28,7 @@ def test_a_right_click_on_the_bar_hangs_the_settings_below_it(desktop):
     assert not near(desktop.at(196, 120), CARD), desktop.at(196, 120)
 
 
+@pytest.mark.local
 def test_the_settings_curve_out_of_the_bar_and_round_their_free_corners(desktop):
     opened(desktop)
     # The concave corner left of the card, below the bar: filled where the

@@ -2,8 +2,9 @@
 //! it.
 
 use engine::Side;
-use renderer::{Corner, Fillet, Point, RoundedRect, Scene};
+use renderer::{Point, Scene};
 
+use crate::hang;
 use crate::theme::Theme;
 
 /// Logical pixels.
@@ -34,48 +35,5 @@ pub fn card(side: Side) -> [Point; 2] {
 /// In the panel's colour and without an outline, so that the card reads as
 /// part of the panel.
 pub fn draw(scene: &mut Scene, side: Side, t: &Theme) {
-    let [p0, p1] = card(side);
-    // Reaching past the edge against the panel, so that only the free
-    // corners show rounded.
-    let (mut q0, mut q1) = (p0, p1);
-    match side {
-        Side::Below => q0.y -= RADIUS,
-        Side::Above => q1.y += RADIUS,
-        Side::Right => q0.x -= RADIUS,
-        Side::Left => q1.x += RADIUS,
-    }
-    scene.push(RoundedRect {
-        p0: q0,
-        p1: q1,
-        r: RADIUS,
-        color: t.surface,
-    });
-    // Where the card's sides leave the panel, so that the panel's edge
-    // curves into them.
-    let fillets = match side {
-        Side::Below => [
-            (Point::new(p0.x, 0.0), Corner::TopRight),
-            (Point::new(p1.x, 0.0), Corner::TopLeft),
-        ],
-        Side::Above => [
-            (Point::new(p0.x, p1.y), Corner::BottomRight),
-            (Point::new(p1.x, p1.y), Corner::BottomLeft),
-        ],
-        Side::Right => [
-            (Point::new(0.0, p0.y), Corner::BottomLeft),
-            (Point::new(0.0, p1.y), Corner::TopLeft),
-        ],
-        Side::Left => [
-            (Point::new(p1.x, p0.y), Corner::BottomRight),
-            (Point::new(p1.x, p1.y), Corner::TopRight),
-        ],
-    };
-    for (at, corner) in fillets {
-        scene.push(Fillet {
-            at,
-            corner,
-            r: RADIUS,
-            color: t.surface,
-        });
-    }
+    hang::draw(scene, card(side), side, RADIUS, t.surface);
 }

@@ -17,10 +17,19 @@ pub const DEFAULT: &str = include_str!("../../../assets/default-config.toml");
 // being ignored without a word.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
+// The settings after the first two have defaults, so that a file written
+// before they existed still reads.
 pub struct Config {
     pub orientation: Orientation,
     #[serde(deserialize_with = "thickness")]
     pub thickness: f32,
+    /// 0 spans the monitor.
+    #[serde(default, deserialize_with = "length")]
+    pub length: f32,
+    #[serde(default, deserialize_with = "gap")]
+    pub gap: f32,
+    #[serde(default, deserialize_with = "radius")]
+    pub radius: f32,
 }
 
 /// The shipped file, so that the defaults live in one place, the file users
@@ -43,6 +52,35 @@ fn thickness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
         Err(D::Error::custom(format!(
             "thickness {t} is less than 1 pixel"
         )))
+    }
+}
+
+/// Between 0 and 1 the panel would get size 0 along its length, the same
+/// protocol error as a thickness under 1.
+fn length<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let l = f32::deserialize(d)?;
+    if l == 0.0 || l >= 1.0 {
+        Ok(l)
+    } else {
+        Err(D::Error::custom(format!(
+            "length {l} is neither 0 nor at least 1 pixel"
+        )))
+    }
+}
+
+fn gap<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("gap", f32::deserialize(d)?)
+}
+
+fn radius<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("radius", f32::deserialize(d)?)
+}
+
+fn not_negative<E: Error>(name: &str, value: f32) -> Result<f32, E> {
+    if value >= 0.0 {
+        Ok(value)
+    } else {
+        Err(E::custom(format!("{name} {value} is negative")))
     }
 }
 
@@ -78,6 +116,9 @@ mod tests {
         let want = Config {
             orientation: Orientation::Horizontal,
             thickness: 44.0,
+            length: 0.0,
+            gap: 0.0,
+            radius: 0.0,
         };
         assert_eq!(Config::default(), want);
     }
@@ -90,6 +131,12 @@ mod tests {
             (panel.anchor, panel.orientation, panel.thickness),
             (Anchor::Left, Orientation::Vertical, 30.0)
         );
+    }
+
+    #[test]
+    fn a_file_from_before_the_length_gap_and_radius_still_reads() {
+        let config = parse("orientation = \"horizontal\"\nthickness = 30").unwrap();
+        assert_eq!((config.length, config.gap, config.radius), (0.0, 0.0, 0.0));
     }
 
     #[test]
@@ -113,6 +160,18 @@ mod tests {
             (
                 "orientation = \"vertical\"\nthickness = \"wide\"",
                 "thickness",
+            ),
+            (
+                "orientation = \"vertical\"\nthickness = 4\nlength = 0.5",
+                "neither 0",
+            ),
+            (
+                "orientation = \"vertical\"\nthickness = 4\ngap = -1",
+                "gap -1 is negative",
+            ),
+            (
+                "orientation = \"vertical\"\nthickness = 4\nradius = -2",
+                "radius -2 is negative",
             ),
         ] {
             let err = parse(text).unwrap_err();

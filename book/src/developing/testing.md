@@ -17,9 +17,9 @@ Three kinds of tests deserve a mention:
 | File | What it tests |
 |---|---|
 | `test_startup.py` | Room on every monitor, the first start, the log, one tonish per session |
-| `test_settings.py` | Editing the settings, and broken edits |
+| `test_settings.py` | Editing the settings, broken edits, and the room a panel keeps with a gap or a shorter length |
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
-| `test_drawing.py` | `tonish msg redraw`, and how the bar looks |
+| `test_drawing.py` | `tonish msg redraw`, and how the bar looks: its logo, its rounded corners, and the concave corners of a shorter bar |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
 | `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer, and a left click on the bar, a click outside or Escape closes it |
 
