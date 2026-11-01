@@ -76,11 +76,51 @@ local settings: Settings = {
         inverse_radius = 14,
     },
 
-    -- How panels move, such as the settings as they open and close.
+    -- How panels move, such as the settings as they open, close and are
+    -- pulled off the bar. Most motions are springs: stiffness sets how fast
+    -- one moves, at least 1, and damping how it comes to rest: 1 without
+    -- overshooting, lower overshoots and wobbles for longer, at least 0.05.
     animation = {
         -- The most frames a second an animation draws, such as 60 to spare
         -- the GPU on a fast monitor. 0 draws every frame the monitor shows.
         max_fps = 0,
+
+        -- A panel growing out of the bar.
+        popout = { stiffness = 260, damping = 0.5 },
+
+        -- A panel folding back into the bar.
+        fold = { stiffness = 420, damping = 0.85 },
+
+        -- A panel following the pointer while its grip is held.
+        drag = { stiffness = 420, damping = 0.6 },
+
+        -- Pulling a panel off the bar by its grip.
+        detaching = {
+            -- How far out, in pixels, the neck between them breaks, at
+            -- least 20.
+            distance = 140,
+            -- How much the bar holds the panel back while the neck holds:
+            -- from 0, not at all, to 0.9.
+            pull = 0.35,
+            -- How thick the neck is: 1 as shipped, 2 twice as thick.
+            thickness = 1,
+            -- How hard the bar's edge springs back as the neck breaks, in
+            -- pixels a second.
+            kick = 260,
+        },
+
+        -- A panel let go while a neck joins it to the bar, docking there,
+        -- and how hard the bar's edge springs out as it arrives.
+        attaching = { stiffness = 320, damping = 0.45, kick = 200 },
+
+        -- How much a panel squashes and stretches as it moves, 0 not at
+        -- all, and how it wobbles once it stops.
+        wobble = { amount = 1, stiffness = 220, damping = 0.22 },
+
+        -- The waves on the bar's edge where a panel leaves or joins it: how
+        -- high they rise in pixels and how many seconds they run. The
+        -- spring is the bar's edge ringing when kicked.
+        ripples = { height = 7, duration = 1.5, stiffness = 400, damping = 0.25 },
     },
 
     -- Figures on how tonish runs, in the top left corner below the bar:

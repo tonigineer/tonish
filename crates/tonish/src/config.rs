@@ -68,6 +68,106 @@ pub struct Animation {
     /// rate.
     #[serde(deserialize_with = "max_fps")]
     pub max_fps: f32,
+    pub popout: Motion,
+    pub fold: Motion,
+    pub drag: Motion,
+    pub detaching: Detaching,
+    pub attaching: Attaching,
+    pub wobble: Wobble,
+    pub ripples: Ripples,
+}
+
+/// A spring, as [`crate::motion::Spring::aim`] takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Detaching {
+    /// Logical pixels the card's middle goes out from where it hangs
+    /// before the neck breaks.
+    #[serde(deserialize_with = "distance")]
+    pub distance: f32,
+    #[serde(deserialize_with = "pull")]
+    pub pull: f32,
+    /// A multiple of the shipped neck's width.
+    #[serde(deserialize_with = "thickness_share")]
+    pub thickness: f32,
+    /// Pixels a second.
+    #[serde(deserialize_with = "kick")]
+    pub kick: f32,
+}
+
+/// Flat rather than a [`Motion`] and a kick, since deny_unknown_fields
+/// doesn't work with serde's flatten.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attaching {
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+    #[serde(deserialize_with = "kick")]
+    pub kick: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Wobble {
+    #[serde(deserialize_with = "amount")]
+    pub amount: f32,
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+/// The waves on the bar's edge, and the [`Motion`] it rings with when
+/// kicked.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ripples {
+    #[serde(deserialize_with = "height")]
+    pub height: f32,
+    #[serde(deserialize_with = "duration")]
+    pub duration: f32,
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+impl Attaching {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
+}
+
+impl Wobble {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
+}
+
+impl Ripples {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -228,17 +328,18 @@ fn run(lua: &Lua, text: &str, name: &str) -> Result<Table, String> {
     }
 }
 
-/// Section by section, so that a section the script sets in part keeps the
-/// shipped values of the rest.
+/// Section by section, at every depth, so that a section the script sets in
+/// part keeps the shipped values of the rest. A radius is one value even as
+/// a table: the corners it leaves out are square, not the shipped ones.
 fn merge(shipped: &Table, mine: &Table) -> mlua::Result<()> {
     for pair in mine.pairs::<Value, Value>() {
         let (key, value) = pair?;
+        let radius = key
+            .as_string()
+            .is_some_and(|k| k.to_string_lossy() == "radius");
         match (shipped.get::<Value>(key.clone())?, &value) {
-            (Value::Table(section), Value::Table(settings)) => {
-                for pair in settings.pairs::<Value, Value>() {
-                    let (k, v) = pair?;
-                    section.set(k, v)?;
-                }
+            (Value::Table(section), Value::Table(settings)) if !radius => {
+                merge(&section, settings)?;
             }
             _ => shipped.set(key, value)?,
         }
@@ -378,6 +479,60 @@ fn max_fps<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
     not_negative("max_fps", f32::deserialize(d)?)
 }
 
+/// 0 would never move, and leave a panel that never opens or closes.
+fn stiffness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("stiffness", 1.0, f32::deserialize(d)?)
+}
+
+/// 0 would never come to rest, and draw for good.
+fn damping<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("damping", 0.05, f32::deserialize(d)?)
+}
+
+/// The neck starts 14 pixels out, where the card leaves the bar.
+fn distance<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("distance", 20.0, f32::deserialize(d)?)
+}
+
+/// At 1 the bar would hold the card where it hangs, and it could never be
+/// pulled off.
+fn pull<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let p = f32::deserialize(d)?;
+    if (0.0..=0.9).contains(&p) {
+        Ok(p)
+    } else {
+        Err(D::Error::custom(format!("pull {p} is outside 0 to 0.9")))
+    }
+}
+
+fn thickness_share<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("thickness", f32::deserialize(d)?)
+}
+
+fn kick<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("kick", f32::deserialize(d)?)
+}
+
+fn amount<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("amount", f32::deserialize(d)?)
+}
+
+fn height<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("height", f32::deserialize(d)?)
+}
+
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("duration", f32::deserialize(d)?)
+}
+
+fn at_least<E: Error>(name: &str, least: f32, value: f32) -> Result<f32, E> {
+    if value >= least {
+        Ok(value)
+    } else {
+        Err(E::custom(format!("{name} {value} is less than {least}")))
+    }
+}
+
 fn gap<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
     not_negative("gap", f32::deserialize(d)?)
 }
@@ -431,7 +586,43 @@ mod tests {
                 radius: [14.0; 4],
                 inverse_radius: 14.0,
             },
-            animation: Animation { max_fps: 0.0 },
+            animation: Animation {
+                max_fps: 0.0,
+                popout: Motion {
+                    stiffness: 260.0,
+                    damping: 0.5,
+                },
+                fold: Motion {
+                    stiffness: 420.0,
+                    damping: 0.85,
+                },
+                drag: Motion {
+                    stiffness: 420.0,
+                    damping: 0.6,
+                },
+                detaching: Detaching {
+                    distance: 140.0,
+                    pull: 0.35,
+                    thickness: 1.0,
+                    kick: 260.0,
+                },
+                attaching: Attaching {
+                    stiffness: 320.0,
+                    damping: 0.45,
+                    kick: 200.0,
+                },
+                wobble: Wobble {
+                    amount: 1.0,
+                    stiffness: 220.0,
+                    damping: 0.22,
+                },
+                ripples: Ripples {
+                    height: 7.0,
+                    duration: 1.5,
+                    stiffness: 400.0,
+                    damping: 0.25,
+                },
+            },
             hud: Hud { show: true },
         };
         assert_eq!(Config::default(), want);
@@ -455,7 +646,30 @@ mod tests {
             keys(&shipped),
             ["animation", "bar", "border", "hud", "panel"]
         );
-        assert_eq!(keys(&shipped.get("animation").unwrap()), ["max_fps"]);
+        let animation: Table = shipped.get("animation").unwrap();
+        let motions = [
+            "attaching",
+            "detaching",
+            "drag",
+            "fold",
+            "max_fps",
+            "popout",
+            "ripples",
+            "wobble",
+        ];
+        assert_eq!(keys(&animation), motions);
+        let spring = ["damping", "stiffness"];
+        for motion in ["popout", "fold", "drag"] {
+            assert_eq!(keys(&animation.get(motion).unwrap()), spring, "{motion}");
+        }
+        let detaching = ["distance", "kick", "pull", "thickness"];
+        assert_eq!(keys(&animation.get("detaching").unwrap()), detaching);
+        let attaching = ["damping", "kick", "stiffness"];
+        assert_eq!(keys(&animation.get("attaching").unwrap()), attaching);
+        let wobble = ["amount", "damping", "stiffness"];
+        assert_eq!(keys(&animation.get("wobble").unwrap()), wobble);
+        let ripples = ["damping", "duration", "height", "stiffness"];
+        assert_eq!(keys(&animation.get("ripples").unwrap()), ripples);
         assert_eq!(keys(&shipped.get("hud").unwrap()), ["show"]);
         let bar = [
             "gap",
@@ -476,16 +690,16 @@ mod tests {
     fn the_types_name_every_setting_and_constant() {
         let lua = state(&stand_in()).unwrap();
         let shipped = run(&lua, DEFAULT, "=default-config.luau").unwrap();
-        for pair in shipped.pairs::<String, Value>() {
-            let (key, value) = pair.unwrap();
-            assert!(TYPES.contains(&format!("{key}: ")), "{key}");
-            if let Value::Table(section) = value {
-                for pair in section.pairs::<String, Value>() {
-                    let setting = pair.unwrap().0;
-                    assert!(TYPES.contains(&format!("{setting}: ")), "{setting}");
+        fn named(table: &Table) {
+            for pair in table.pairs::<String, Value>() {
+                let (key, value) = pair.unwrap();
+                assert!(TYPES.contains(&format!("{key}: ")), "{key}");
+                if let Value::Table(section) = value {
+                    named(&section);
                 }
             }
         }
+        named(&shipped);
         for (constant, value) in ORIENTATION {
             assert!(TYPES.contains(&format!("{constant}: Orientation")));
             assert!(TYPES.contains(&format!("\"{value}\"")));
@@ -524,6 +738,15 @@ mod tests {
         assert_eq!(config.bar.orientation, shipped.bar.orientation);
         assert_eq!(config.panel, shipped.panel);
         assert_eq!(settings("return {}").unwrap(), shipped);
+    }
+
+    #[test]
+    fn a_motion_set_in_part_keeps_the_shipped_rest() {
+        let config = settings("return { animation = { popout = { damping = 0.3 } } }").unwrap();
+        let shipped = Config::default().animation;
+        assert_eq!(config.animation.popout.damping, 0.3);
+        assert_eq!(config.animation.popout.stiffness, shipped.popout.stiffness);
+        assert_eq!(config.animation.ripples, shipped.ripples);
     }
 
     #[test]
@@ -636,6 +859,21 @@ mod tests {
             ("border = -1", "border -1 is negative"),
             ("animation = { max_fps = -30 }", "max_fps -30 is negative"),
             ("hud = { show = 1 }", "hud.show"),
+            (
+                "animation = { popout = { stiffness = 0 } }",
+                "animation.popout.stiffness: stiffness 0 is less than 1",
+            ),
+            ("animation = { drag = { damping = 0 } }", "less than 0.05"),
+            (
+                "animation = { detaching = { pull = 1 } }",
+                "outside 0 to 0.9",
+            ),
+            (
+                "animation = { detaching = { distance = 5 } }",
+                "less than 20",
+            ),
+            ("animation = { wobble = { amount = -1 } }", "amount -1"),
+            ("animation = { fold = { speed = 3 } }", "speed"),
             ("panel = { gap = 4 }", "gap"),
         ] {
             let err = settings(&format!("return {{ {text} }}")).unwrap_err();

@@ -8,8 +8,8 @@ mod socket;
 mod wayland;
 
 pub use app::{
-    App, Button, Drawn, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply, Side,
-    SurfaceId, SurfaceSpec,
+    App, Button, Cursor, Drawn, Key, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, Reply,
+    Side, SurfaceId, SurfaceSpec,
 };
 // Re-exported, so that a shell builds its surfaces and scenes with exactly
 // the versions the engine was built against.

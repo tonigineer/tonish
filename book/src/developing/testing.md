@@ -8,7 +8,7 @@ Three kinds of tests deserve a mention:
 
 - **Property tests on shapes**, in `shapes/mod.rs`. Every shape belongs in their lists. They check that `bounds` contains the shape, and that `inside`, `hole` and `sdf` agree with `distance`.
 - **The reference test** in `cpu.rs`. It draws 600 random scenes both with `draw` and with the plain per-pixel algorithm, and compares every byte. The scenes come from a fixed xorshift, so a failure repeats on every run.
-- **The GPU tests** in `gpu/mod.rs`. `the_gpu_draws_what_the_cpu_draws` draws 200 random scenes with OpenGL ES into a framebuffer, without a display, and allows them to differ from the CPU rasteriser's by 2 per channel. The others check that a frame the CPU drew shows unchanged, and that a shape without `sdf` leaves the frame to the CPU. Their context comes from `gpu/headless.rs`, which the GPU benchmarks share, and needs an EGL that offers Mesa's surfaceless platform, as Mesa and NVIDIA's driver do. Where there is none, the tests pass without checking anything, and the desktop tests check the GPU instead.
+- **The GPU tests** in `gpu/mod.rs`. `the_gpu_draws_what_the_cpu_draws` draws 200 random scenes with OpenGL ES into a framebuffer, without a display, and allows them to differ from the CPU rasteriser's by 2 per channel. The others check that a frame the CPU drew shows unchanged, and that a shape without `sdf` leaves the frame to the CPU. Their context comes from `gpu/headless.rs`, which the GPU benchmarks share, and needs an EGL that offers Mesa's surfaceless platform, as Mesa and NVIDIA's driver do. Where there is none, the tests pass without checking anything, and the desktop tests check the GPU instead. Shaders that don't compile fail them, rather than counting as no GPU.
 
 ## Desktop tests
 
@@ -21,8 +21,8 @@ Three kinds of tests deserve a mention:
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
 | `test_drawing.py` | `tonish msg redraw`, `--draw-always`, and how the bar looks: its logo, its rounded corners, and the concave corners of a shorter bar |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
-| `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer; it animates as it opens and then stops drawing, `max_fps` caps its frames, and a left click on the bar, a click outside or Escape folds it back |
-| `test_hud.py` | The figures in the corner show text without taking room from windows, `tonish msg hud` hides and shows them, and they draw a few times a second |
+| `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer; it animates as it opens and then stops drawing, `max_fps` caps its frames, its grip pulls it off the bar and it stays where it is let go and stops drawing once it rests, dragged back it hangs again and takes the grab back at a press on its grip, and a left click on the bar, a click outside or Escape folds it back |
+| `test_hud.py` | The figures in the corner show text without taking room from windows, `tonish msg hud` hides and shows them, `hud.show = false` hides them until `tonish msg hud`, and they draw a few times a second |
 | `test_timing.py` | How long drawing takes on this machine's GPU: warm and cold redraws, and resizes, each within a budget |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
@@ -38,6 +38,7 @@ The fixture is a `Desktop` from `harness.py`, with what tests need to look at to
 - `wait_for_panels()` to wait until tonish is ready for messages and edits;
 - `wait_for_gpu()` to wait until the GPU has taken over both monitors' panels;
 - `click(x, y, button)` to click in the layout's logical pixels, with a button as Linux names it, such as `BTN_RIGHT`;
+- `drag(points, seconds)` to press the left button at the first point, move through the others and let go at the last, with the virtual pointer's own motion: sway passes no motion on for its `seat - cursor` commands while a button is held;
 - `key(name)` to type a key, such as `Escape`, with wtype.
 
 The headless sway has no input devices, so it offers clients no pointer. The first `click` gives it one with a `VirtualPointer`, a Wayland client in the harness that speaks the wire protocol itself, and then clicks with sway's `seat - cursor` commands. Tests that type keys are skipped where wtype isn't installed.

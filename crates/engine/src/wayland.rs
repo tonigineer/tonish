@@ -20,7 +20,7 @@ use smithay_client_toolkit::{
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{SeatState, pointer::cursor_shape::CursorShapeManager},
-    shell::xdg::{XdgShell, popup::Popup},
+    shell::xdg::XdgShell,
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -171,6 +171,7 @@ pub fn run(app: Box<dyn App>, options: Options) -> Result<(), String> {
         seat_state: SeatState::new(&globals, &qh),
         xdg_shell: XdgShell::bind(&globals, &qh).ok(),
         cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
+        viewporter: globals.bind(&qh, 1..=1, ()).ok(),
         pointers: Vec::new(),
         keyboards: Vec::new(),
         pressed: None,
@@ -340,6 +341,9 @@ struct Engine {
     /// `None` on a compositor without cursor-shape-v1, which then shows
     /// whatever cursor it likes over the surfaces.
     cursor_shapes: Option<CursorShapeManager>,
+    /// `None` on a compositor without wp_viewporter, where the grab's
+    /// transparent surface takes a buffer as large as itself.
+    viewporter: Option<popup::WpViewporter>,
     pointers: Vec<input::Pointer>,
     keyboards: Vec<(wl_seat::WlSeat, wl_keyboard::WlKeyboard)>,
     /// The last button press, which a popup's grab has to name.
@@ -347,7 +351,7 @@ struct Engine {
     /// The popup's invisible xdg_popup that holds the grab. Before `outs`, so
     /// that it is dropped first: an xdg_popup has to go before the surface it
     /// hangs from.
-    grab: Option<Popup>,
+    grab: Option<popup::Grab>,
     popup: Option<Surface>,
     /// [`App::popup`]'s answer when last asked, so that a popup opens only
     /// when the answer changes.

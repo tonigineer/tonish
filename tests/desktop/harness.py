@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# Linux's input-event-codes.h.
+BTN_LEFT = 0x110
 TONISH = Path(os.environ.get("TONISH", ROOT / "target/release/tonish"))
 OUT = Path(__file__).resolve().parent / "out"
 
@@ -76,7 +78,28 @@ class VirtualPointer:
         # the interface's name and version before the id.
         bind = u32(names[self.MANAGER]) + string(self.MANAGER) + u32(1, manager)
         self.request(registry, 0, bind)
-        self.request(manager, 0, u32(0, next(self.ids)))  # for the default seat
+        self.device = next(self.ids)
+        self.request(manager, 0, u32(0, self.device))  # for the default seat
+        list(self.roundtrip())
+
+    # The layout of the two monitors side by side, which absolute motion is
+    # given in.
+    LAYOUT = (3840, 1080)
+
+    def move_to(self, x, y):
+        """Motion of the device itself, which sway passes on while a button
+        is held, as it does not for `seat - cursor set`, a warp."""
+        w, h = self.LAYOUT
+        self.request(
+            self.device, 1, u32(0, round(x), round(y), w, h)
+        )  # motion_absolute
+        self.request(self.device, 4, b"")  # frame
+        list(self.roundtrip())
+
+    def button(self, code, pressed):
+        """`code` as Linux numbers buttons, such as 0x110 for the left one."""
+        self.request(self.device, 2, u32(0, code, 1 if pressed else 0))
+        self.request(self.device, 4, b"")
         list(self.roundtrip())
 
     def request(self, sender, opcode, body):
@@ -158,10 +181,13 @@ class Desktop:
         # close() closes it.
         self.log = open(self.dir / "tonish.log", "w")  # noqa: SIM115
         # The engine at debug, so that tests can count draws and a failure
-        # shows them.
+        # shows them, unless TONISH_LOG asks for another level, such as
+        # engine=trace for every pointer motion.
         self.tonish = subprocess.Popen(
             [str(TONISH), *args],
-            env=dict(self.env, TONISH_LOG="engine=debug,info"),
+            env=dict(
+                self.env, TONISH_LOG=os.environ.get("TONISH_LOG", "engine=debug,info")
+            ),
             stdout=self.log,
             stderr=subprocess.STDOUT,
         )
@@ -262,6 +288,19 @@ class Desktop:
         self.swaymsg("seat", "-", "cursor", "set", str(x), str(y))
         self.swaymsg("seat", "-", "cursor", "press", button)
         self.swaymsg("seat", "-", "cursor", "release", button)
+
+    def drag(self, points, seconds=0.5):
+        """Presses the left button at the first point, moves through the
+        others in even steps over `seconds`, and lets go at the last."""
+        if self.pointer is None:
+            self.pointer = VirtualPointer(self.env)
+            assert wait_for(lambda: "pointer added" in self.logged()), self.logged()
+        self.pointer.move_to(*points[0])
+        self.pointer.button(BTN_LEFT, True)
+        for x, y in points[1:]:
+            time.sleep(seconds / max(len(points) - 1, 1))
+            self.pointer.move_to(x, y)
+        self.pointer.button(BTN_LEFT, False)
 
     def key(self, name):
         """A key by its xkb name, such as Escape, typed with wtype."""

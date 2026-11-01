@@ -8,6 +8,7 @@ pub mod config;
 pub mod hang;
 pub mod hud;
 pub mod ipc;
+pub mod liquid;
 pub mod logging;
 pub mod motion;
 pub mod settings;

@@ -11,10 +11,10 @@ use smithay_client_toolkit::seat::pointer::{
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::{delegate_pointer, delegate_seat};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use super::{Engine, Role};
-use crate::app::{Button, Key, On, SurfaceId};
+use crate::app::{Button, Cursor, Key, On, SurfaceId};
 
 /// Linux's input-event-codes.h, which wl_pointer and wl_keyboard send.
 const BTN_LEFT: u32 = 0x110;
@@ -26,14 +26,48 @@ pub(crate) struct Pointer {
     seat: wl_seat::WlSeat,
     wl: wl_pointer::WlPointer,
     shape: Option<WpCursorShapeDeviceV1>,
+    /// The serial of the pointer's last entry into a surface, which a
+    /// change of cursor has to name, and the cursor shown since.
+    entered: Option<(u32, Cursor)>,
+}
+
+impl Pointer {
+    /// Only when it changes: the compositor redraws the cursor for every
+    /// request, and the pointer moves far more often than the cursor does.
+    fn show(&mut self, cursor: Cursor) {
+        let (Some(device), Some((serial, shown))) = (&self.shape, &mut self.entered) else {
+            return;
+        };
+        if *shown == cursor {
+            return;
+        }
+        *shown = cursor;
+        device.set_shape(
+            *serial,
+            match cursor {
+                Cursor::Default => Shape::Default,
+                Cursor::Pointer => Shape::Pointer,
+                Cursor::Grab => Shape::Grab,
+                Cursor::Grabbing => Shape::Grabbing,
+            },
+        );
+    }
 }
 
 impl Engine {
+    /// The app's surface the pointer is on. The grab's surface takes the
+    /// pointer for the popup, and lies exactly over it, so that a position
+    /// on one is the same on the other.
     fn on(&self, wl: &wl_surface::WlSurface) -> Option<On> {
-        if self
-            .popup
+        let grab = self
+            .grab
             .as_ref()
-            .is_some_and(|p| p.role.wl_surface() == wl)
+            .is_some_and(|g| g.popup.wl_surface() == wl);
+        if grab
+            || self
+                .popup
+                .as_ref()
+                .is_some_and(|p| p.role.wl_surface() == wl)
         {
             return Some(On::Popup);
         }
@@ -68,7 +102,12 @@ impl SeatHandler for Engine {
                         .cursor_shapes
                         .as_ref()
                         .map(|m| m.get_shape_device(&wl, qh));
-                    self.pointers.push(Pointer { seat, wl, shape });
+                    self.pointers.push(Pointer {
+                        seat,
+                        wl,
+                        shape,
+                        entered: None,
+                    });
                     debug!("pointer added");
                 }
                 Err(e) => warn!("cannot use the pointer, so clicks do nothing: {e}"),
@@ -123,34 +162,69 @@ impl PointerHandler for Engine {
         pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        let button = |code| match code {
+            BTN_LEFT => Button::Left,
+            BTN_RIGHT => Button::Right,
+            BTN_MIDDLE => Button::Middle,
+            other => Button::Other(other),
+        };
         for event in events {
+            let on = self.on(&event.surface);
+            let at = (event.position.0 as f32, event.position.1 as f32);
             match event.kind {
                 // The compositor leaves the cursor to the client over its
                 // surfaces, and shows whatever it last had without this.
                 PointerEventKind::Enter { serial } => {
-                    let shape = self.pointers.iter().find(|p| &p.wl == pointer);
-                    if let Some(shape) = shape.and_then(|p| p.shape.as_ref()) {
-                        shape.set_shape(serial, Shape::Default);
+                    if let Some(p) = self.pointers.iter_mut().find(|p| &p.wl == pointer) {
+                        // Not what it showed elsewhere, so that the first
+                        // `show` sets it.
+                        p.entered = Some((serial, Cursor::Grabbing));
+                        p.show(Cursor::Default);
                     }
                 }
-                PointerEventKind::Press { button, serial, .. } => {
+                PointerEventKind::Press {
+                    button: code,
+                    serial,
+                    ..
+                } => {
                     if let Some(data) = pointer.data::<PointerData>() {
                         self.pressed = Some((data.seat().clone(), serial));
                     }
-                    let Some(on) = self.on(&event.surface) else {
+                    let Some(on) = on else {
                         continue;
                     };
-                    let button = match button {
-                        BTN_LEFT => Button::Left,
-                        BTN_RIGHT => Button::Right,
-                        BTN_MIDDLE => Button::Middle,
-                        other => Button::Other(other),
-                    };
-                    let at = (event.position.0 as f32, event.position.1 as f32);
-                    debug!(on = ?on, at = ?at, button = ?button, "pressed");
-                    self.app.pressed(on, at, button);
+                    debug!(on = ?on, at = ?at, button = ?button(code), "pressed");
+                    self.app.pressed(on, at, button(code));
+                }
+                PointerEventKind::Release { button: code, .. } => {
+                    if let Some(on) = on {
+                        trace!(on = ?on, at = ?at, button = ?button(code), "released");
+                        self.app.released(on, at, button(code));
+                    }
+                }
+                // While a button is held, the surface it was pressed on gets
+                // the motion even outside it, so that a drag goes on.
+                PointerEventKind::Motion { .. } => {
+                    if let Some(on) = on {
+                        trace!(on = ?on, at = ?at, "moved");
+                        self.app.moved(on, at);
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if let Some(on) = on {
+                        trace!(on = ?on, "left");
+                        self.app.left(on);
+                    }
                 }
                 _ => {}
+            }
+            if let Some(on) = on
+                && !matches!(event.kind, PointerEventKind::Leave { .. })
+            {
+                let cursor = self.app.cursor(on, at);
+                if let Some(p) = self.pointers.iter_mut().find(|p| &p.wl == pointer) {
+                    p.show(cursor);
+                }
             }
         }
     }

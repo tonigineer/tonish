@@ -15,6 +15,11 @@ use smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::
     self, ZxdgDecorationManagerV1,
 };
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewport::{
+    self, WpViewport,
+};
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewporter;
+pub(super) use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use smithay_client_toolkit::shell::xdg::XdgShell;
 use tracing::{debug, warn};
 
@@ -31,6 +36,7 @@ impl Engine {
             return;
         }
         let before = std::mem::replace(&mut self.wanted, wanted.clone());
+        let had_grab = self.grab.is_some();
         let Some(spec) = wanted else {
             // The app asked for this, so it is not told.
             self.grab = None;
@@ -39,9 +45,12 @@ impl Engine {
             }
             return;
         };
-        let moved =
-            before.is_none_or(|b| (b.parent, b.at, b.size) != (spec.parent, spec.at, spec.size));
-        if self.popup.is_none() || moved {
+        let moved = before.as_ref().is_none_or(|b| {
+            (b.parent, b.at, b.size, b.parent_at)
+                != (spec.parent, spec.at, spec.size, spec.parent_at)
+        });
+        let opened = self.popup.is_none() || moved;
+        if opened {
             self.grab = None;
             self.popup = None;
             if let Err(e) = self.open_popup(&spec) {
@@ -57,7 +66,13 @@ impl Engine {
         {
             warn!("the popup cannot take the keyboard or hear of clicks outside it: {e}");
         }
-        self.popup_input(&spec);
+        // Only when it changed: a card that comes to rest changes the spec
+        // at every frame, but its input region only as it moves, and each
+        // change commits two surfaces.
+        let input = before.as_ref().is_none_or(|b| b.input != spec.input);
+        if opened || input || had_grab != self.grab.is_some() {
+            self.popup_input(&spec);
+        }
     }
 
     fn open_popup(&mut self, spec: &PopupSpec) -> Result<(), String> {
@@ -102,11 +117,17 @@ impl Engine {
         Ok(())
     }
 
-    /// An xdg_popup of a single transparent pixel on the parent, which only
-    /// holds the compositor's grab: the keyboard, and the end of the grab on
-    /// a click outside the app's surfaces. The popup the app draws can't
-    /// hold it, because a layer surface can't take a grab.
+    /// A transparent xdg_popup exactly over the popup, which holds the
+    /// compositor's grab: the keyboard, and the end of the grab on a click
+    /// outside. The popup the app draws can't hold it, because a layer
+    /// surface can't take a grab. It takes the pointer for the popup too,
+    /// where the popup does, since Hyprland lets only the grab's own surface
+    /// have it during the grab, a layer surface's popup having no parent
+    /// there. As large as the popup, so that a drag whose input is the whole
+    /// popup never leaves it: sway ends a drag that leaves the grab's
+    /// surface, holding on to no surface during a grab.
     fn open_grab(&mut self, spec: &PopupSpec) -> Result<(), String> {
+        let (w, h) = (spec.size.0 as i32, spec.size.1 as i32);
         let (seat, serial) = self
             .pressed
             .clone()
@@ -124,36 +145,60 @@ impl Engine {
         let Some(Role::Layer { layer, .. }) = out.surfaces.get(si).map(|s| &s.role) else {
             return Err("the surface it hangs from is gone".into());
         };
+        // Exactly there, without sliding or flipping it, so that the
+        // pointer's place on it maps back onto the popup.
         let positioner = XdgPositioner::new(xdg).map_err(|e| e.to_string())?;
-        positioner.set_size(1, 1);
-        positioner.set_anchor_rect(0, 0, 1, 1);
+        positioner.set_size(w.max(1), h.max(1));
+        positioner.set_anchor_rect(
+            spec.at.0 - spec.parent_at.0,
+            spec.at.1 - spec.parent_at.1,
+            1,
+            1,
+        );
         positioner.set_anchor(PopupAnchor::TopLeft);
         positioner.set_gravity(Gravity::BottomRight);
         let surface = self.compositor.create_surface(&self.qh);
         let popup = Popup::from_surface(None, &positioner, &self.qh, surface, xdg)
             .map_err(|e| e.to_string())?;
         layer.get_popup(popup.xdg_popup());
-        let empty = Region::new(&self.compositor).map_err(|e| e.to_string())?;
-        popup.wl_surface().set_input_region(Some(empty.wl_region()));
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|v| v.get_viewport(popup.wl_surface(), &self.qh, ()));
         // Before the first commit, which the protocol requires of a grab.
         popup.xdg_popup().grab(&seat, serial);
         popup.wl_surface().commit();
-        self.grab = Some(popup);
+        self.grab = Some(Grab {
+            viewport,
+            popup,
+            size: (w.max(1), h.max(1)),
+        });
         Ok(())
     }
 
-    /// Committed with the popup's next frame, which the app draws whenever
-    /// its answer changes; an empty region lets every click through.
-    fn popup_input(&mut self, spec: &PopupSpec) {
+    /// The part of the popup that takes the pointer goes to the grab's
+    /// surface while there is one, and the popup's own lets every click
+    /// through to it; an empty region lets them through to what is under it.
+    pub(super) fn popup_input(&mut self, spec: &PopupSpec) {
         let Some(surf) = &self.popup else {
             return;
         };
-        let Ok(region) = Region::new(&self.compositor) else {
+        let (Ok(part), Ok(none)) = (Region::new(&self.compositor), Region::new(&self.compositor))
+        else {
             return;
         };
         if let Some((x, y, w, h)) = spec.input {
-            region.add(x, y, w, h);
+            part.add(x, y, w, h);
         }
+        let region = match &self.grab {
+            Some(g) => {
+                let ws = g.popup.wl_surface();
+                ws.set_input_region(Some(part.wl_region()));
+                ws.commit();
+                &none
+            }
+            None => &part,
+        };
         let ws = surf.role.wl_surface();
         ws.set_input_region(Some(region.wl_region()));
         match &surf.window {
@@ -163,13 +208,29 @@ impl Engine {
     }
 
     fn is_grab(&self, popup: &Popup) -> bool {
-        self.grab.as_ref() == Some(popup)
+        self.grab.as_ref().is_some_and(|g| &g.popup == popup)
+    }
+}
+
+/// The grab's surface, and its size in logical pixels, the popup's.
+pub(super) struct Grab {
+    /// Before `popup`, so that it goes first, before its surface.
+    viewport: Option<WpViewport>,
+    pub(super) popup: Popup,
+    size: (i32, i32),
+}
+
+impl Drop for Grab {
+    fn drop(&mut self) {
+        if let Some(v) = &self.viewport {
+            v.destroy();
+        }
     }
 }
 
 impl PopupHandler for Engine {
-    /// The grab's pixel, transparent, in a buffer of shared memory: it never
-    /// changes, and the GPU need not know of it.
+    /// Transparent, in a buffer of shared memory: it never changes, and the
+    /// GPU need not know of it.
     fn configure(
         &mut self,
         _: &Connection,
@@ -177,16 +238,29 @@ impl PopupHandler for Engine {
         popup: &Popup,
         _: PopupConfigure,
     ) {
-        if !self.is_grab(popup) {
+        let Some(g) = self.grab.as_ref().filter(|g| &g.popup == popup) else {
             return;
-        }
-        let Ok((buffer, px)) = self.pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888) else {
+        };
+        // One pixel stretched over it, where the compositor can stretch it,
+        // rather than a buffer as large as the monitor.
+        let (w, h) = g.size;
+        let (bw, bh) = match &g.viewport {
+            Some(v) => {
+                v.set_destination(w, h);
+                (1, 1)
+            }
+            None => (w, h),
+        };
+        let Ok((buffer, px)) = self
+            .pool
+            .create_buffer(bw, bh, bw * 4, wl_shm::Format::Argb8888)
+        else {
             return;
         };
         px.fill(0);
         let ws = popup.wl_surface();
         if buffer.attach_to(ws).is_ok() {
-            ws.damage_buffer(0, 0, 1, 1);
+            ws.damage_buffer(0, 0, bw, bh);
         }
         ws.commit();
     }
@@ -197,6 +271,10 @@ impl PopupHandler for Engine {
             self.grab = None;
             debug!("popup dismissed");
             self.app.popup_dismissed();
+            // The popup takes the pointer itself again.
+            if let Some(spec) = self.wanted.clone() {
+                self.popup_input(&spec);
+            }
         }
     }
 }
@@ -222,6 +300,30 @@ impl Engine {
 // windows.
 delegate_dispatch!(Engine: [XdgWmBase: GlobalData] => XdgShell);
 delegate_xdg_popup!(Engine);
+
+impl Dispatch<WpViewporter, ()> for Engine {
+    fn event(
+        _: &mut Self,
+        _: &WpViewporter,
+        _: wp_viewporter::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewport, ()> for Engine {
+    fn event(
+        _: &mut Self,
+        _: &WpViewport,
+        _: wp_viewport::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
 
 /// `XdgShell::bind` binds the decoration manager too, which has no events.
 impl Dispatch<ZxdgDecorationManagerV1, GlobalData> for Engine {

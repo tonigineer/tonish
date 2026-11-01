@@ -80,6 +80,19 @@ pub enum Button {
     Other(u32),
 }
 
+/// The cursor over a spot of a surface, from cursor-shape-v1's names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Default,
+    /// Over something that does something when clicked.
+    Pointer,
+    /// Over something that can be dragged.
+    Grab,
+    /// While something is dragged.
+    Grabbing,
+}
+
 /// Keys arrive as evdev codes, without a keyboard layout, so that the engine
 /// needs no xkbcommon. That covers the keys that are in the same place on
 /// every layout, and only those are named.
@@ -110,7 +123,13 @@ pub struct PopupSpec {
     pub grab: bool,
     /// The part that takes the pointer, as x, y, width and height in logical
     /// pixels on the popup. Clicks elsewhere go to whatever is under it.
+    /// While it holds the grab, the part as it is when the grab starts takes
+    /// the pointer through the grab's own surface: Hyprland lets only that
+    /// surface have the pointer during a grab, not the popup's.
     pub input: Option<(i32, i32, i32, i32)>,
+    /// Where the surface it opens from is, in logical pixels on the popup,
+    /// for the grab's surface, which hangs from it.
+    pub parent_at: (i32, i32),
 }
 
 /// Where something is from what it opens out of: a panel below a bar along
@@ -203,6 +222,24 @@ pub trait App {
     /// A pointer button pressed on one of the app's surfaces, at `at` in
     /// logical pixels on it.
     fn pressed(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
+
+    /// The button pressed on `on` was let go, at `at` on that surface, which
+    /// may lie outside it after a drag.
+    fn released(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
+
+    /// The pointer moved over `on`, or anywhere while a button pressed on it
+    /// is held, to `at` on that surface.
+    fn moved(&mut self, _on: On, _at: (f32, f32)) {}
+
+    /// The pointer left `on`, so that what lit up under it can go dark: no
+    /// motion over it follows until the pointer comes back.
+    fn left(&mut self, _on: On) {}
+
+    /// Asked whenever the pointer enters a surface or moves over it or
+    /// while dragging from it.
+    fn cursor(&self, _on: On, _at: (f32, f32)) -> Cursor {
+        Cursor::Default
+    }
 
     /// Only a popup's grab gets the keyboard, so keys arrive only while one
     /// holds it.

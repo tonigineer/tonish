@@ -35,6 +35,14 @@ struct Instance {
     /// The waves on its edge: centre, amplitude, group and phase, with an
     /// amplitude of 0 for none.
     wave: [f32; 4],
+    /// The neck's `from` and `to`, each as x and y.
+    neck: [f32; 4],
+    /// The neck's half width at its ends and in its middle, and its blend,
+    /// with a fourth value of 0 for no neck, and for a neck 1 more than its
+    /// cut, which is never negative.
+    more: [f32; 4],
+    /// The bulge's centre and height, 0 for none, and the edge's extent.
+    bulge: [f32; 4],
     color: [u8; 4],
 }
 
@@ -120,10 +128,13 @@ impl Gpu {
                 (0, 4, glow::FLOAT, 0),
                 (1, 4, glow::FLOAT, 16),
                 (2, 4, glow::FLOAT, 32),
-                (3, 4, glow::UNSIGNED_BYTE, 96),
+                (3, 4, glow::UNSIGNED_BYTE, 144),
                 (4, 4, glow::FLOAT, 48),
                 (5, 4, glow::FLOAT, 64),
                 (6, 4, glow::FLOAT, 80),
+                (7, 4, glow::FLOAT, 96),
+                (8, 4, glow::FLOAT, 112),
+                (9, 4, glow::FLOAT, 128),
             ] {
                 gl.enable_vertex_attrib_array(index);
                 // Normalised, so that the colour bytes arrive as 0..1.
@@ -178,14 +189,31 @@ impl Gpu {
         for shape in shapes {
             let sdf = shape.sdf().ok_or(Unsupported)?;
             let c = shape.color();
-            let (melt, clip, wave) = match sdf.melt {
+            let (melt, clip, wave, neck, more, bulge) = match sdf.melt {
                 Some(m) => (
                     [m.normal.x, m.normal.y, m.offset, m.radius],
                     [m.clip[0].x, m.clip[0].y, m.clip[1].x, m.clip[1].y],
                     m.wave
                         .map_or([0.0; 4], |w| [w.center, w.amplitude, w.group, w.phase]),
+                    m.neck
+                        .map_or([0.0; 4], |n| [n.from.x, n.from.y, n.to.x, n.to.y]),
+                    m.neck.map_or([0.0; 4], |n| {
+                        [n.end, n.waist, n.blend, 1.0 + n.cut.max(0.0)]
+                    }),
+                    {
+                        let [lo, hi] = m.extent;
+                        m.bulge
+                            .map_or([0.0, 0.0, lo, hi], |b| [b.center, b.height, lo, hi])
+                    },
                 ),
-                None => ([0.0, 0.0, 0.0, -1.0], [0.0; 4], [0.0; 4]),
+                None => (
+                    [0.0, 0.0, 0.0, -1.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                    [0.0; 4],
+                    [0.0; 4],
+                    [0.0; 4],
+                ),
             };
             self.instances.push(Instance {
                 rect: [sdf.center.x, sdf.center.y, sdf.half.x, sdf.half.y],
@@ -194,6 +222,9 @@ impl Gpu {
                 melt,
                 clip,
                 wave,
+                neck,
+                more,
+                bulge,
                 color: [c.r, c.g, c.b, c.a],
             });
         }

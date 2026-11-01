@@ -16,6 +16,11 @@ export type Radius = number | {
     bottom_left: number?,
 }
 
+export type Motion = {
+    stiffness: number?,
+    damping: number?,
+}
+
 export type Settings = {
     border: number?,
     bar: {
@@ -32,6 +37,31 @@ export type Settings = {
     }?,
     animation: {
         max_fps: number?,
+        popout: Motion?,
+        fold: Motion?,
+        drag: Motion?,
+        detaching: {
+            distance: number?,
+            pull: number?,
+            thickness: number?,
+            kick: number?,
+        }?,
+        attaching: {
+            stiffness: number?,
+            damping: number?,
+            kick: number?,
+        }?,
+        wobble: {
+            amount: number?,
+            stiffness: number?,
+            damping: number?,
+        }?,
+        ripples: {
+            height: number?,
+            duration: number?,
+            stiffness: number?,
+            damping: number?,
+        }?,
     }?,
     hud: {
         show: boolean?,

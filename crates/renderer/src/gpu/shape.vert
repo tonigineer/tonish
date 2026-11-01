@@ -11,6 +11,9 @@ layout(location = 3) in vec4 a_color; // straight alpha
 layout(location = 4) in vec4 a_melt;  // the edge's normal and offset, the corners' radius; radius < 0: none
 layout(location = 5) in vec4 a_clip;  // the melted shape's clip, as its corners
 layout(location = 6) in vec4 a_wave;  // waves on the edge: centre, amplitude, group, phase
+layout(location = 7) in vec4 a_neck;  // the neck's ends
+layout(location = 8) in vec4 a_more;  // the neck's half width at its ends and middle, its blend; w 0 for none, else 1 + its cut
+layout(location = 9) in vec4 a_bulge; // the bulge's centre and height
 
 uniform vec2 u_size; // the framebuffer, physical pixels
 uniform float u_scale;
@@ -22,6 +25,9 @@ flat out vec4 v_color;
 flat out vec4 v_melt;
 flat out vec4 v_clip;
 flat out vec4 v_wave;
+flat out vec4 v_neck;
+flat out vec4 v_more;
+flat out vec4 v_bulge;
 
 void main() {
     // The corners come from the vertex index, so the quad needs no vertex
@@ -42,4 +48,7 @@ void main() {
     v_melt = a_melt;
     v_clip = a_clip;
     v_wave = a_wave;
+    v_neck = a_neck;
+    v_more = a_more;
+    v_bulge = a_bulge;
 }

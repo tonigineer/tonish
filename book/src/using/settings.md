@@ -8,11 +8,13 @@ tonish reads its settings from `$XDG_CONFIG_HOME/tonish/config.luau`, which is `
 
 To get the defaults back, delete the file; tonish writes it again on its next start. If it can't write the file at all, for example because your home is read-only, or if neither `XDG_CONFIG_HOME` nor `HOME` is set, it starts with the built-in settings, which are the same, and logs a warning.
 
-A setting you leave out takes its default, so a file can return only what you change:
+A setting you leave out takes its default, so a file can return only what you change, at any depth:
 
 ```lua
-return { bar = { thickness = 30 } }
+return { bar = { thickness = 30 }, animation = { popout = { damping = 0.3 } } }
 ```
+
+A `radius` table is the one exception: it is a single setting, and a corner it leaves out is square rather than its default.
 
 ## Settings for each monitor
 
@@ -100,6 +102,22 @@ The rest come in four sections: `bar` for the bar along the edge of the monitor,
 | `animation` | Values | Default |
 |---|---|---|
 | `max_fps` | The most frames a second an animation draws, such as the settings panel as it opens and closes, at least 0. `0` draws every frame the compositor offers, at the monitor's refresh rate. A lower number, such as `60` on a 165 Hz monitor, spares the GPU and the CPU, and the animation takes as long. | `0` |
+| `popout` | How a panel grows out of the bar, as a spring: see below. | `{ stiffness = 260, damping = 0.5 }` |
+| `fold` | How a panel folds back into the bar. | `{ stiffness = 420, damping = 0.85 }` |
+| `drag` | How a panel follows the pointer while you hold its grip. | `{ stiffness = 420, damping = 0.6 }` |
+| `detaching` | Pulling a panel off the bar by its grip: see below. | |
+| `attaching` | How a panel docks when you let it go while a neck joins it to the bar, as a spring, and `kick`, how hard the bar's edge springs out as it arrives, in pixels a second. | `{ stiffness = 320, damping = 0.45, kick = 200 }` |
+| `wobble` | How much a panel squashes and stretches as it moves, `amount`, from `0`, not at all, and how it wobbles once it stops, as a spring. | `{ amount = 1, stiffness = 220, damping = 0.22 }` |
+| `ripples` | The waves on the bar's edge where a panel leaves or joins it: `height`, how high they rise in pixels, and `duration`, how many seconds they run; and how the bar's edge rings when kicked, as a spring. | `{ height = 7, duration = 1.5, stiffness = 400, damping = 0.25 }` |
+
+Most motions are springs, set by two numbers. `stiffness`, at least 1, sets how fast the motion is: higher is quicker. `damping`, at least 0.05, sets how it comes to rest: `1` without overshooting, lower overshoots and wobbles for longer.
+
+| `animation.detaching` | Values | Default |
+|---|---|---|
+| `distance` | How far out, in pixels, the neck between the panel and the bar breaks, at least 20. | `140` |
+| `pull` | How much the bar holds the panel back while the neck holds, from `0`, not at all, to `0.9`. | `0.35` |
+| `thickness` | How thick the neck is: `1` as shipped, `2` twice as thick. | `1` |
+| `kick` | How hard the bar's edge springs back as the neck breaks, in pixels a second. | `260` |
 
 | `hud` | Values | Default |
 |---|---|---|
@@ -109,7 +127,13 @@ Pixels here are logical pixels, as your compositor counts them: on a monitor at 
 
 ## The settings panel
 
-Right-click the bar to open the settings panel. It grows out of the bar's inner edge like a drop, centred where you clicked, though no nearer the bar's ends than its straight edge allows, below a bar along the top, to the right of one down the left, shaped by the `panel` settings. Escape, a click outside it, or a left click on the bar folds it back into the bar, where it leaves waves on the bar's edge, as on water after a drop falls in: they run apart along the edge and die away within a second and a half. A click outside tonish only closes it and doesn't reach the window you clicked: sway and Hyprland keep it from the window while a panel is open. It shows no settings yet; the file is still the place to change them.
+Right-click the bar to open the settings panel. It grows out of the bar's inner edge like a drop, centred where you clicked, though no nearer the bar's ends than its straight edge allows, below a bar along the top, to the right of one down the left, shaped by the `panel` settings. Escape, a click outside it, or a left click on the bar folds it back into the bar, where it leaves waves on the bar's edge, as on water after a drop falls in: they run apart along the edge and die away within a second and a half. A click outside tonish only closes it and doesn't reach the window you clicked: sway and Hyprland keep it from the window while a panel is open.
+
+The short bar along the middle of its edge at the bar is its grip. Pull the panel off the bar by it, and a neck of liquid stretches between the two, standing square on the bar and on the panel, shaped as a soap film between two rings: it hardly narrows as you pull, the bar's edge swells after it, and the bar holds the panel back a little. Once you have pulled it `detaching.distance` out, 140 pixels as shipped, the film can't hold: it collapses all at once, the two halves snap back into the bar and the panel, a bead of it falls into the panel, and waves run along the bar. Off the bar, the panel stays where you let it go, and no longer takes the keyboard or closes on a click elsewhere.
+
+Bring it back near the bar and the neck reaches out to it again, from anywhere under the bar's straight edge but close to its ends. Let go while a neck joins the two, and the bar pulls the panel in, and it docks where it is along the bar, sliding in as far as it must to stay clear of the bar's ends. A click on it then lets it take the keyboard again. Dragged along the bar past where it can dock, the panel follows more slowly and sags off the bar's end, until the neck breaks.
+
+It shows no settings yet; the file is still the place to change them.
 
 ## Changes apply when you save
 
@@ -133,7 +157,8 @@ A monitor that appears while tonish runs, and that the file fails for, gets the 
 - **A setting outside its section**, such as `thickness` outside `bar`, is an error, which names the sections.
 - **A value of the wrong kind** is an error, such as `orientation = 2`, `thickness = "wide"`, or a `radius` with a corner `top`.
 - **A thickness under 1, or a length between 0 and 1,** is an error. The compositor would end tonish's connection for a bar 0 pixels thick or long.
-- **A negative gap, radius, inverse radius, border or `max_fps`** is an error.
+- **A negative gap, radius, inverse radius, border, `max_fps`, `kick`, `amount`, `height` or `duration`, or a negative `detaching.thickness`,** is an error.
+- **A spring that would never move or never stop**, with a `stiffness` under 1 or a `damping` under 0.05, is an error. So is a `detaching.distance` under 20 pixels, where the neck starts, or a `pull` outside 0 to 0.9: at 1 the bar would hold the panel for good.
 
 At start, a broken file is an error that ends tonish: it prints what's wrong and exits with 1.
 
