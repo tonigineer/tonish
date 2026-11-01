@@ -22,6 +22,7 @@ Three kinds of tests deserve a mention:
 | `test_drawing.py` | `tonish msg redraw`, and how the bar looks: its logo, its rounded corners, and the concave corners of a shorter bar |
 | `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, new panels after a settings change go to the GPU, tonish quits cleanly with the GPU running, and `--disable-gpu` never starts it |
 | `test_settings_panel.py` | A right-click on the bar hangs the settings panel below it at the pointer, and a left click on the bar, a click outside or Escape closes it |
+| `test_timing.py` | How long drawing takes on this machine's GPU: warm and cold redraws, and resizes, each within a budget |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
 - a fresh `HOME`, settings folder and runtime folder, so tests can't affect each other or your desktop;
@@ -43,22 +44,24 @@ The module also has `wait_for`, which polls a condition for up to three seconds,
 
 A test that compares runs, such as the CPU against the GPU, asks for `desktops` instead: a function that starts one desktop per call, with arguments for tonish, such as `desktops("--disable-gpu")`.
 
-The headless sway draws without a GPU, so Mesa's software renderer stands in for one, even on a machine with NVIDIA's driver: tonish's log names it as `llvmpipe`. That is enough to check the shader and the engine's EGL side, but not how fast either is.
+The headless sway draws without a GPU, so Mesa's software renderer stands in for one, even on a machine with NVIDIA's driver: tonish's log names it as `llvmpipe`. That is enough to check the shader and the engine's EGL side, but not how fast either is. For that, `Desktop(hardware=True)` has sway composite on this machine's GPU, and tonish then draws on it too, because EGL takes the GPU only from a compositor that shares buffers on it. `timing.py` measures draws there, for the timing tests and [`just bench-desktop`](drawing.md#on-the-gpu-in-a-compositor).
 
 The tests run `target/release/tonish`, which `just desktop` builds first. To test another binary, set `TONISH` to its path.
 
-Tests come in two kinds:
+Tests come in three kinds:
 
 - **Plain tests** are general: what tonish does, such as keeping room for its panels, reloading its settings, quitting on a message. CI runs these.
 - **`@pytest.mark.local`** tests are exact: how panels look, down to the pixel. CI leaves them out, so that changing a panel's look needs no round trip through CI.
+- **`@pytest.mark.hardware`** tests time drawing on this machine's GPU, which CI has none of. They take half a minute, most of it idling for the cold draws, so they run only when you ask for them with `-m hardware`, and are skipped where sway finds no GPU to composite on. Their budgets leave room for a GPU busy with other work, such as a game.
 
 Arguments to `just desktop` go to pytest:
 
 ```sh
-just desktop                  # every test
-just desktop -k redraw        # those whose name contains "redraw"
-just desktop --lf             # those that failed last time
-just desktop -m "not local"   # what CI runs
+just desktop                                # every test but the timing tests
+just desktop -k redraw                      # those whose name contains "redraw"
+just desktop --lf                           # those that failed last time
+just desktop -m hardware                    # the timing tests
+just desktop -m "not local and not hardware"  # what CI runs
 ```
 
 When a test fails, the report ends with the last 20 lines of tonish's log for every desktop that still runs, and a screenshot of each is saved as `tests/desktop/out/<test>.png`, or `<test>-<n>.png` when the test has several.

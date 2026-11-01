@@ -114,8 +114,11 @@ class VirtualPointer:
 
 
 class Desktop:
-    def __init__(self, *args):
-        """`args` go to tonish, such as `--disable-gpu`."""
+    def __init__(self, *args, hardware=False):
+        """`args` go to tonish, such as `--disable-gpu`. With `hardware`,
+        sway composites on this machine's GPU, which makes tonish draw on it
+        too: EGL takes the GPU only from a compositor that shares buffers on
+        it, and Mesa's software renderer otherwise."""
         self.dir = Path(tempfile.mkdtemp(prefix="tonish-test-"))
         self.pointer = None
         home, run = self.dir / "home", self.dir / "run"
@@ -129,14 +132,17 @@ class Desktop:
             XDG_RUNTIME_DIR=str(run),
         )
         (self.dir / "sway.conf").write_text(SWAY.format(dir=self.dir))
+        # sway refuses NVIDIA's driver unless told otherwise, and ignores
+        # the flag on any other.
+        gpu = ["--unsupported-gpu"] if hardware else []
         self.sway = subprocess.Popen(
-            ["sway", "-c", str(self.dir / "sway.conf")],
+            ["sway", *gpu, "-c", str(self.dir / "sway.conf")],
             env=dict(
                 self.env,
                 WLR_BACKENDS="headless",
                 WLR_HEADLESS_OUTPUTS="2",
                 WLR_LIBINPUT_NO_DEVICES="1",
-                WLR_RENDERER="pixman",
+                WLR_RENDERER="gles2" if hardware else "pixman",
             ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -30,6 +30,7 @@
 | `just desktop [args]` | Runs the [desktop tests](testing.md#desktop-tests). Arguments go to pytest, such as `-k redraw` or `--lf`. |
 | `just check-all` | `just check`, then the desktop tests: everything a pull request checks in code. |
 | `just bench [filter]`, `just bench-save`, `just bench-compare` | [Benchmark](drawing.md#measuring) the renderer, and compare against a saved baseline. |
+| `just bench-desktop [args]` | [Time drawing](drawing.md#on-the-gpu-in-a-compositor) on this machine's GPU in a headless sway: warm and cold redraws, and resizes. |
 | `just doc` | Builds the [API documentation](api.md), private items included, with warnings as errors. |
 | `just book` | Builds this book, with the API documentation inside it, into `book/build`. |
 | `just book-serve` | Serves this book at `http://localhost:3000` and rebuilds it as you edit. The API documentation isn't part of it there. |

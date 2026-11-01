@@ -136,7 +136,7 @@ jobs:
           tar xzf dist/tonish-*.tar.gz --strip-components=1 -C target/release
 
       - name: Run the desktop tests
-        run: uv run pytest -m "not local"
+        run: uv run pytest -m "not local and not hardware"
 
       - name: Keep the screenshots of failures
         if: failure()
