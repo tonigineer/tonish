@@ -1,14 +1,16 @@
+use std::fmt;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use calloop::channel::{self, Event};
 use calloop::signals::{Signal, Signals};
+use calloop::timer::{TimeoutAction, Timer};
 use inotify::{Inotify, WatchDescriptor, WatchMask};
 use renderer::Scene;
 use smithay_client_toolkit::reexports::calloop::generic::Generic;
-use smithay_client_toolkit::reexports::calloop::{Interest, Mode, PostAction};
+use smithay_client_toolkit::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
@@ -17,6 +19,8 @@ use smithay_client_toolkit::{
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{SeatState, pointer::cursor_shape::CursorShapeManager},
+    shell::xdg::XdgShell,
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -30,12 +34,17 @@ use tracing::{debug, error, info, warn};
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_output, wl_shm, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface},
 };
 
-use crate::app::{App, Layer, Output, OutputId, Paint, Redraw, SurfaceId, SurfaceSpec};
+use crate::app::{
+    App, Drawn, Layer, On, Output, OutputId, Paint, PopupSpec, Redraw, SurfaceId, SurfaceSpec,
+};
 use crate::gles;
 use crate::socket::{self, Socket};
+
+mod input;
+mod popup;
 
 /// Whether surfaces are drawn with OpenGL ES once it has started.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -50,10 +59,21 @@ pub enum Gpu {
     Disabled,
 }
 
+/// How the engine runs, as the command line sets it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    pub gpu: Gpu,
+    /// Every surface is drawn again as soon as it has been drawn, without
+    /// waiting for the compositor's next frame, unless [`App::max_fps`] caps
+    /// it: to see how many frames a second tonish reaches.
+    pub draw_always: bool,
+}
+
 /// Returns `Ok` after a quit message, SIGINT (Ctrl+C) or SIGTERM, once the
 /// loop has finished what it was doing. The errors are strings, because the
 /// only thing a caller does with them is print them.
-pub fn run(app: Box<dyn App>, gpu: Gpu) -> Result<(), String> {
+pub fn run(app: Box<dyn App>, options: Options) -> Result<(), String> {
+    let Options { gpu, draw_always } = options;
     // Before connecting to Wayland, so that a second instance stops before
     // it has made a single surface.
     let listening = app.socket().map(|path| socket::listen(&path)).transpose()?;
@@ -145,13 +165,26 @@ pub fn run(app: Box<dyn App>, gpu: Gpu) -> Result<(), String> {
             .map_err(|_| "no layer shell (wlr-layer-shell)")?,
         pool: SlotPool::new(1 << 16, &shm).map_err(|e| e.to_string())?,
         shm,
-        qh,
+        qh: qh.clone(),
         conn: conn.clone(),
         handle: event_loop.handle(),
+        seat_state: SeatState::new(&globals, &qh),
+        xdg_shell: XdgShell::bind(&globals, &qh).ok(),
+        cursor_shapes: CursorShapeManager::bind(&globals, &qh).ok(),
+        viewporter: globals.bind(&qh, 1..=1, ()).ok(),
+        pointers: Vec::new(),
+        keyboards: Vec::new(),
+        pressed: None,
+        grab: None,
+        popup: None,
+        wanted: None,
+        popup_waits: None,
+        grab_failed: false,
         outs: Vec::new(),
         app,
         scene: Scene::new(),
         gpu,
+        draw_always,
         gles: GlesState::NotStarted,
         watch,
         quit: false,
@@ -161,6 +194,10 @@ pub fn run(app: Box<dyn App>, gpu: Gpu) -> Result<(), String> {
         event_loop
             .dispatch(None, &mut engine)
             .map_err(|e| e.to_string())?;
+        if engine.app.to_reshape() {
+            engine.reshape(false);
+        }
+        engine.update_popup();
         engine.redraw();
     }
     // Destroys the surfaces and sends that, so the panels are gone before a
@@ -171,14 +208,85 @@ pub fn run(app: Box<dyn App>, gpu: Gpu) -> Result<(), String> {
 }
 
 struct Surface {
-    /// Before `layer`, so that it is dropped first: EGL draws into the
+    /// Before `role`, so that it is dropped first: EGL draws into the
     /// wl_surface until its window is gone.
     window: Option<gles::Window>,
-    layer: LayerSurface,
-    spec: SurfaceSpec,
+    role: Role,
     /// Logical pixels: the buffer is this times the output's scale.
     size: (u32, u32),
     configured: bool,
+    /// A frame callback is on its way, so that an animation asks for one
+    /// per frame rather than one per draw.
+    frame_pending: bool,
+    /// When its last frame was drawn, which [`App::max_fps`] counts from.
+    drawn_at: Option<Instant>,
+    /// The timer that draws its next frame once [`App::max_fps`] allows it.
+    /// Any draw cancels it, so that a surface drawn for another reason, such
+    /// as the GPU taking over, goes on with one chain of frames and not two.
+    timer: Option<RegistrationToken>,
+}
+
+enum Role {
+    Layer {
+        layer: LayerSurface,
+        spec: SurfaceSpec,
+    },
+    Popup {
+        layer: LayerSurface,
+        spec: PopupSpec,
+    },
+}
+
+impl Surface {
+    /// Whether the surface can take `spec` in place: a layer surface's
+    /// namespace is fixed, and so is its layer at the protocol version the
+    /// engine uses.
+    fn keeps(&self, spec: &SurfaceSpec) -> bool {
+        match &self.role {
+            Role::Layer { spec: old, .. } => old.name == spec.name && old.layer == spec.layer,
+            Role::Popup { .. } => false,
+        }
+    }
+}
+
+impl Role {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Role::Layer { layer, .. } => layer.wl_surface(),
+            Role::Popup { layer, .. } => layer.wl_surface(),
+        }
+    }
+}
+
+/// A surface by its indices into the outputs and their surfaces, or the
+/// popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Target {
+    Layer(usize, usize),
+    Popup,
+}
+
+/// For the log, where the output is a field of its own.
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Target::Layer(_, si) => write!(f, "{si}"),
+            Target::Popup => f.write_str("popup"),
+        }
+    }
+}
+
+/// A free function rather than a method, so that it borrows only these two
+/// fields and leaves the rest of the engine free.
+fn surface<'a>(
+    outs: &'a mut [Out],
+    popup: &'a mut Option<Surface>,
+    t: Target,
+) -> Option<&'a mut Surface> {
+    match t {
+        Target::Layer(oi, si) => outs.get_mut(oi)?.surfaces.get_mut(si),
+        Target::Popup => popup.as_mut(),
+    }
 }
 
 struct Out {
@@ -229,10 +337,39 @@ struct Engine {
     /// For the source that hears from the GPU's thread, added only when the
     /// thread starts.
     handle: LoopHandle<'static, Engine>,
+    seat_state: SeatState,
+    /// `None` on a compositor without xdg-shell, where no popup opens.
+    xdg_shell: Option<XdgShell>,
+    /// `None` on a compositor without cursor-shape-v1, which then shows
+    /// whatever cursor it likes over the surfaces.
+    cursor_shapes: Option<CursorShapeManager>,
+    /// `None` on a compositor without wp_viewporter, where the grab's
+    /// transparent surface takes a buffer as large as itself.
+    viewporter: Option<popup::WpViewporter>,
+    pointers: Vec<input::Pointer>,
+    keyboards: Vec<(wl_seat::WlSeat, wl_keyboard::WlKeyboard)>,
+    /// The last button press, which a popup's grab has to name.
+    pressed: Option<(wl_seat::WlSeat, u32)>,
+    /// The popup's invisible xdg_popup that holds the grab. Before `outs`, so
+    /// that it is dropped first: an xdg_popup has to go before the surface it
+    /// hangs from.
+    grab: Option<popup::Grab>,
+    popup: Option<Surface>,
+    /// [`App::popup`]'s answer when last asked, so that a popup opens only
+    /// when the answer changes.
+    wanted: Option<PopupSpec>,
+    /// From when the popup opened or changed whether it takes the keyboard,
+    /// until a frame of it sent since is committed, which carries that
+    /// change to the compositor: its grab waits for that.
+    popup_waits: Option<Instant>,
+    /// Taking the grab failed for this answer of [`App::popup`], so that it
+    /// isn't tried again at every batch.
+    grab_failed: bool,
     outs: Vec<Out>,
     app: Box<dyn App>,
     scene: Scene,
     gpu: Gpu,
+    draw_always: bool,
     gles: GlesState,
     watch: Option<Watch>,
     quit: bool,
@@ -328,13 +465,17 @@ impl Engine {
         // Panels take no keys yet, and any other mode lets them take the
         // keyboard focus away from windows.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        self.input_region(layer.wl_surface(), spec.input);
         layer.commit();
+        debug!(name = %spec.name, "surface made");
         Surface {
             window: None,
-            layer,
-            spec,
+            role: Role::Layer { layer, spec },
             size: (0, 0),
             configured: false,
+            frame_pending: false,
+            drawn_at: None,
+            timer: None,
         }
     }
 
@@ -364,28 +505,94 @@ impl Engine {
                 break;
             }
         }
-        let mut rebuild = false;
+        let mut reshape = false;
         for path in &changed {
-            rebuild |= self.app.changed(path);
+            reshape |= self.app.changed(path);
         }
-        if rebuild {
-            self.rebuild();
+        if reshape {
+            self.reshape(true);
         }
     }
 
-    /// The old surfaces are destroyed as they are dropped; the new ones are
-    /// drawn once the compositor configures them, as on a first start.
-    fn rebuild(&mut self) {
-        debug!("rebuilding every surface");
+    /// The whole surface, as by default, or nothing, which lets every click
+    /// through.
+    fn input_region(&self, ws: &wl_surface::WlSurface, input: bool) {
+        if input {
+            ws.set_input_region(None);
+        } else if let Ok(empty) = smithay_client_toolkit::compositor::Region::new(&self.compositor)
+        {
+            ws.set_input_region(Some(empty.wl_region()));
+        }
+    }
+
+    /// Matches the app's new surfaces to the old ones by their place in the
+    /// list, as [`SurfaceId`] does. Surfaces that are gone are destroyed as
+    /// they are dropped, and new ones are drawn once the compositor
+    /// configures them, as on a first start. A popup goes along when
+    /// `settings` say the settings changed, since its place comes from the
+    /// old shape of what it opened from, and otherwise only when the
+    /// surface its grab hangs from is replaced.
+    fn reshape(&mut self, settings: bool) {
+        if settings {
+            self.lose_popup();
+        }
+        let parent = self.wanted.as_ref().map(|p| p.parent);
         for oi in 0..self.outs.len() {
             let wl = self.outs[oi].wl.clone();
+            let id = self.outs[oi].info.id;
             let specs = self.app.surfaces(&self.outs[oi].info);
-            let surfaces = specs
-                .into_iter()
-                .map(|spec| self.layer(&wl, spec))
-                .collect();
+            let kept = specs.len();
+            let mut old = std::mem::take(&mut self.outs[oi].surfaces).into_iter();
+            let mut surfaces = Vec::with_capacity(specs.len());
+            for (si, spec) in specs.into_iter().enumerate() {
+                let surf = match old.next() {
+                    Some(surf) if surf.keeps(&spec) => self.reshape_one(surf, spec),
+                    _ => {
+                        if parent == Some((id, SurfaceId(si))) {
+                            self.lose_popup();
+                        }
+                        self.layer(&wl, spec)
+                    }
+                };
+                surfaces.push(surf);
+            }
+            if parent.is_some_and(|(o, SurfaceId(si))| o == id && si >= kept) {
+                self.lose_popup();
+            }
             self.outs[oi].surfaces = surfaces;
         }
+    }
+
+    /// The new state applies with a commit, which the compositor answers with
+    /// a configure, and the configure draws the surface at its new size.
+    fn reshape_one(&self, mut surf: Surface, spec: SurfaceSpec) -> Surface {
+        let Role::Layer { layer, spec: old } = &mut surf.role else {
+            return surf;
+        };
+        if *old == spec {
+            return surf;
+        }
+        layer.set_anchor(spec.anchor);
+        layer.set_size(spec.size.0, spec.size.1);
+        layer.set_exclusive_zone(spec.exclusive);
+        let m = spec.margin;
+        layer.set_margin(m.0, m.1, m.2, m.3);
+        self.input_region(layer.wl_surface(), spec.input);
+        debug!(name = %spec.name, "surface reshaped");
+        // A surface that changes size waits for the configure with its new
+        // size: the app's redraw, which comes first, would draw the new shape
+        // cut to the old size, for a frame and for nothing. One that keeps its
+        // size is drawn with the redraw, since compositors such as sway send
+        // no configure for a size that stays.
+        if resized(surf.size, spec.size) {
+            surf.configured = false;
+        }
+        *old = spec;
+        match &surf.window {
+            Some(window) => window.commit(layer.wl_surface().clone()),
+            None => layer.commit(),
+        }
+        surf
     }
 
     fn redraw(&mut self) {
@@ -393,50 +600,140 @@ impl Engine {
         if redraw == Redraw::Nothing {
             return;
         }
+        for t in self.targets(redraw) {
+            self.draw(t);
+        }
+    }
+
+    fn targets(&self, redraw: Redraw) -> Vec<Target> {
         let outs: Vec<_> = self
             .outs
             .iter()
             .map(|o| (o.info.id, o.surfaces.len()))
             .collect();
-        for (oi, si) in targets(&outs, redraw) {
-            self.draw(oi, si);
+        targets(&outs, redraw)
+    }
+
+    fn is_popup_layer(&self, layer: &LayerSurface) -> bool {
+        self.popup
+            .as_ref()
+            .is_some_and(|p| matches!(&p.role, Role::Popup { layer: l, .. } if l == layer))
+    }
+
+    fn on_of(&self, t: Target) -> On {
+        match t {
+            Target::Layer(oi, si) => On::Surface(self.outs[oi].info.id, SurfaceId(si)),
+            Target::Popup => On::Popup,
         }
+    }
+
+    fn target_of(&self, ws: &wl_surface::WlSurface) -> Option<Target> {
+        if self
+            .popup
+            .as_ref()
+            .is_some_and(|p| p.role.wl_surface() == ws)
+        {
+            return Some(Target::Popup);
+        }
+        self.outs.iter().enumerate().find_map(|(oi, o)| {
+            let si = o.surfaces.iter().position(|s| s.role.wl_surface() == ws)?;
+            Some(Target::Layer(oi, si))
+        })
     }
 
     fn find_layer(&self, layer: &LayerSurface) -> Option<(usize, usize)> {
         self.outs.iter().enumerate().find_map(|(oi, o)| {
-            let si = o.surfaces.iter().position(|s| &s.layer == layer)?;
+            let si = o
+                .surfaces
+                .iter()
+                .position(|s| matches!(&s.role, Role::Layer { layer: l, .. } if l == layer))?;
             Some((oi, si))
         })
     }
 
-    fn draw(&mut self, oi: usize, si: usize) {
-        let out = &self.outs[oi];
-        let scale = out.info.scale;
-        let surf = &out.surfaces[si];
-        if !surf.configured || surf.size.0 == 0 || surf.size.1 == 0 {
+    /// The output the surface is on, and its size, if it can be drawn.
+    fn drawable(&self, t: Target) -> Option<(usize, (u32, u32))> {
+        let (oi, surf) = match t {
+            Target::Layer(oi, si) => (oi, self.outs.get(oi)?.surfaces.get(si)?),
+            Target::Popup => {
+                let surf = self.popup.as_ref()?;
+                let Role::Popup { spec, .. } = &surf.role else {
+                    return None;
+                };
+                let parent = spec.parent.0;
+                (self.outs.iter().position(|o| o.info.id == parent)?, surf)
+            }
+        };
+        let size = surf.size;
+        (surf.configured && size.0 > 0 && size.1 > 0).then_some((oi, size))
+    }
+
+    fn draw(&mut self, t: Target) {
+        let Some((oi, size)) = self.drawable(t) else {
             return;
-        }
+        };
+        let (id, scale) = (self.outs[oi].info.id, self.outs[oi].info.scale);
         let started = Instant::now();
         self.scene.clear();
         let mut paint = Paint {
             scene: &mut self.scene,
-            size: (surf.size.0 as f32, surf.size.1 as f32),
+            size: (size.0 as f32, size.1 as f32),
             scale: scale as f32,
+            time: started,
         };
-        self.app.draw(out.info.id, SurfaceId(si), &mut paint);
-        let size = (surf.size.0 as i32 * scale, surf.size.1 as i32 * scale);
+        let on = match t {
+            Target::Layer(_, si) => On::Surface(id, SurfaceId(si)),
+            Target::Popup => On::Popup,
+        };
+        match on {
+            On::Surface(_, si) => self.app.draw(id, si, &mut paint),
+            On::Popup => self.app.draw_popup(&mut paint),
+        }
+        let animating = self.draw_always || self.app.animating(on);
+        let unpaced = self.draw_always && self.app.max_fps(on).is_none();
+        let px = (size.0 as i32 * scale, size.1 as i32 * scale);
+        let monitor = name(&self.outs[oi].info).to_owned();
+        let Some(surf) = surface(&mut self.outs, &mut self.popup, t) else {
+            return;
+        };
+        surf.drawn_at = Some(started);
+        if let Some(token) = surf.timer.take() {
+            self.handle.remove(token);
+        }
+        // Before the commit that shows this frame, which takes the request
+        // along, whichever thread makes it: requests leave in the order they
+        // are made.
+        if animating && !surf.frame_pending {
+            let ws = surf.role.wl_surface().clone();
+            if unpaced {
+                // Once the loop has handled what is pending, rather than at
+                // the compositor's next frame. The flush sends a frame the
+                // CPU drew, since the loop may never go to sleep, which is
+                // where it flushes otherwise.
+                self.handle.insert_idle(move |e| {
+                    if let Some(t) = e.target_of(&ws) {
+                        if let Some(surf) = surface(&mut e.outs, &mut e.popup, t) {
+                            surf.frame_pending = false;
+                        }
+                        e.draw(t);
+                        let _ = e.conn.flush();
+                    }
+                });
+            } else {
+                ws.frame(&self.qh, ws.clone());
+            }
+            surf.frame_pending = true;
+        }
         if let GlesState::Running(thread) = &mut self.gles {
             let built = started.elapsed();
-            let monitor = name(&out.info).to_owned();
-            let surf = &mut self.outs[oi].surfaces[si];
             let frame = gles::Frame {
-                surface: surf.layer.wl_surface().clone(),
-                size,
+                surface: surf.role.wl_surface().clone(),
+                size: px,
                 scale,
                 scene: std::mem::take(&mut self.scene),
                 monitor,
-                index: si,
+                target: t,
+                on,
                 built,
                 sent: Instant::now(),
             };
@@ -446,15 +743,27 @@ impl Engine {
                 .draw(frame);
             return;
         }
-        surf.layer.wl_surface().set_buffer_scale(scale);
-        self.draw_cpu(oi, si, size, scale);
+        surf.role.wl_surface().set_buffer_scale(scale);
+        self.draw_cpu(t, &monitor, px, scale);
+        if on == On::Popup {
+            self.popup_waits = None;
+        }
+        let took = started.elapsed();
         debug!(
-            monitor = %name(&self.outs[oi].info),
-            surface = si,
-            size = ?size,
+            monitor = %monitor,
+            surface = %t,
+            size = ?px,
             on = %"cpu",
-            took = ?started.elapsed(),
+            took = ?took,
             "drew"
+        );
+        self.app.drew(
+            on,
+            Drawn {
+                took,
+                waited: Duration::ZERO,
+                gpu: false,
+            },
         );
         // After the first frame, so that it doesn't wait even for the
         // thread to be made.
@@ -463,25 +772,26 @@ impl Engine {
         }
     }
 
-    fn draw_cpu(&mut self, oi: usize, si: usize, (w, h): (i32, i32), scale: i32) {
-        let out = &mut self.outs[oi];
-        let surf = &mut out.surfaces[si];
+    fn draw_cpu(&mut self, t: Target, monitor: &str, (w, h): (i32, i32), scale: i32) {
         let (buffer, px) = match self
             .pool
             .create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
         {
             Ok(buffer) => buffer,
             Err(e) => {
-                error!(monitor = %name(&out.info), "no buffer to draw into: {e}");
+                error!(monitor = %monitor, "no buffer to draw into: {e}");
                 return;
             }
         };
         renderer::cpu::draw(px, w as usize, h as usize, scale as f32, &self.scene.shapes);
-        let ws = surf.layer.wl_surface();
+        let Some(surf) = surface(&mut self.outs, &mut self.popup, t) else {
+            return;
+        };
+        let ws = surf.role.wl_surface();
         if buffer.attach_to(ws).is_ok() {
             ws.damage_buffer(0, 0, w, h);
         }
-        surf.layer.commit();
+        ws.commit();
     }
 
     fn start_gpu(&mut self) {
@@ -509,16 +819,21 @@ impl Engine {
     /// again for a long time.
     fn gpu_reported(&mut self, report: gles::Report) {
         match report {
-            gles::Report::Started => {
+            gles::Report::Started(device) => {
                 self.gles = match std::mem::replace(&mut self.gles, GlesState::Failed) {
                     GlesState::Starting(thread) => GlesState::Running(thread),
                     other => other,
                 };
-                for oi in 0..self.outs.len() {
-                    for si in 0..self.outs[oi].surfaces.len() {
-                        self.draw(oi, si);
-                    }
+                self.app.gpu_started(&device);
+                for t in self.targets(Redraw::Everything) {
+                    self.draw(t);
                 }
+            }
+            gles::Report::Drew(on, drawn, sent) => {
+                if on == On::Popup && self.popup_waits.is_some_and(|since| sent >= since) {
+                    self.popup_waits = None;
+                }
+                self.app.drew(on, drawn);
             }
             gles::Report::Failed(e) if matches!(self.gles, GlesState::Starting(_)) => {
                 warn!("cannot use the GPU, so every surface is drawn on the CPU: {e}");
@@ -536,16 +851,38 @@ impl Engine {
     fn stop_gpu(&mut self, e: &str) {
         warn!("the GPU failed, so every surface is drawn on the CPU: {e}");
         self.gles = GlesState::Failed;
+        // Before the layer surfaces, one of which is its parent.
+        self.lose_popup();
         for oi in 0..self.outs.len() {
             for si in 0..self.outs[oi].surfaces.len() {
-                if self.outs[oi].surfaces[si].window.is_none() {
+                let surf = &self.outs[oi].surfaces[si];
+                let Role::Layer { spec, .. } = &surf.role else {
+                    continue;
+                };
+                if surf.window.is_none() {
                     continue;
                 }
-                let wl = self.outs[oi].wl.clone();
-                let spec = self.outs[oi].surfaces[si].spec.clone();
+                let (wl, spec) = (self.outs[oi].wl.clone(), spec.clone());
                 self.outs[oi].surfaces[si] = self.layer(&wl, spec);
             }
         }
+    }
+
+    /// Closes the popup without the app asking, as when its parent goes
+    /// away, and tells the app.
+    fn lose_popup(&mut self) {
+        self.grab = None;
+        if self.popup.take().is_some() {
+            debug!("popup closed");
+            self.app.popup_closed();
+        }
+    }
+
+    /// Whether the popup hangs from a surface on this output.
+    fn popup_on(&self, output: OutputId) -> bool {
+        self.popup
+            .as_ref()
+            .is_some_and(|p| matches!(&p.role, Role::Popup { spec, .. } if spec.parent.0 == output))
     }
 }
 
@@ -553,19 +890,23 @@ impl Engine {
 /// asked for twice in one batch is drawn once. Outputs and surfaces that are
 /// gone are left out, because the event that removed them may have come in
 /// the same batch, after the app asked.
-fn targets(outs: &[(OutputId, usize)], redraw: Redraw) -> Vec<(usize, usize)> {
+fn targets(outs: &[(OutputId, usize)], redraw: Redraw) -> Vec<Target> {
     let mut targets: Vec<_> = match redraw {
         Redraw::Nothing => Vec::new(),
         Redraw::Everything => outs
             .iter()
             .enumerate()
-            .flat_map(|(oi, &(_, n))| (0..n).map(move |si| (oi, si)))
+            .flat_map(|(oi, &(_, n))| (0..n).map(move |si| Target::Layer(oi, si)))
+            .chain([Target::Popup])
             .collect(),
         Redraw::Surfaces(surfaces) => surfaces
             .into_iter()
-            .filter_map(|(id, SurfaceId(si))| {
-                let oi = outs.iter().position(|&(o, _)| o == id)?;
-                (si < outs[oi].1).then_some((oi, si))
+            .filter_map(|on| match on {
+                On::Surface(id, SurfaceId(si)) => {
+                    let oi = outs.iter().position(|&(o, _)| o == id)?;
+                    (si < outs[oi].1).then_some(Target::Layer(oi, si))
+                }
+                On::Popup => Some(Target::Popup),
             })
             .collect(),
     };
@@ -576,6 +917,15 @@ fn targets(outs: &[(OutputId, usize)], redraw: Redraw) -> Vec<(usize, usize)> {
 
 fn name(out: &Output) -> &str {
     out.name.as_deref().unwrap_or("unnamed")
+}
+
+/// Whether a surface of `size` changes size with the spec's size. Along an
+/// axis the spec leaves to the compositor, it counts as staying: the
+/// compositor may still change it, as for new margins, and the surface is
+/// then drawn twice, but a surface that waited for a configure that never
+/// comes would not be drawn at all.
+fn resized(size: (u32, u32), spec: (u32, u32)) -> bool {
+    (spec.0 > 0 && spec.0 != size.0) || (spec.1 > 0 && spec.1 != size.1)
 }
 
 // ── Wayland handlers ─────────────────────────────────────────────────────────
@@ -597,7 +947,58 @@ impl CompositorHandler for Engine {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    /// The compositor's time stamp is left out: animations step to the time
+    /// the engine starts each frame, the same clock for every surface.
+    ///
+    /// A frame that comes sooner than [`App::max_fps`] allows is drawn when
+    /// it is due, on a timer: the compositor offers frames only at the
+    /// monitor's refresh, so skipping one would wait a whole refresh more.
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, ws: &wl_surface::WlSurface, _: u32) {
+        let Some(t) = self.target_of(ws) else {
+            return;
+        };
+        let on = self.on_of(t);
+        let Some(surf) = surface(&mut self.outs, &mut self.popup, t) else {
+            return;
+        };
+        surf.frame_pending = false;
+        let due = self
+            .app
+            .max_fps(on)
+            .filter(|fps| *fps > 0.0)
+            .zip(surf.drawn_at)
+            .map(|(fps, at)| at + Duration::from_secs_f32(1.0 / fps));
+        match due {
+            Some(due) if due > Instant::now() + Duration::from_millis(1) => {
+                let ws = ws.clone();
+                let timer = self
+                    .handle
+                    .insert_source(Timer::from_deadline(due), move |_, _, e| {
+                        if let Some(t) = e.target_of(&ws) {
+                            // Before the draw, which would otherwise remove
+                            // this very timer while it runs.
+                            if let Some(surf) = surface(&mut e.outs, &mut e.popup, t) {
+                                surf.timer = None;
+                            }
+                            e.draw(t);
+                        }
+                        TimeoutAction::Drop
+                    });
+                match timer {
+                    Ok(token) => {
+                        if let Some(surf) = surface(&mut self.outs, &mut self.popup, t) {
+                            surf.timer = Some(token);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("cannot wait for the next frame, so it is drawn at once: {e}");
+                        self.draw(t);
+                    }
+                }
+            }
+            _ => self.draw(t),
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -633,10 +1034,14 @@ impl OutputHandler for Engine {
         _: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        if let Some(out) = self.outs.iter().find(|o| o.wl == output) {
-            info!(monitor = %name(&out.info), "monitor removed");
+        let Some(oi) = self.outs.iter().position(|o| o.wl == output) else {
+            return;
+        };
+        info!(monitor = %name(&self.outs[oi].info), "monitor removed");
+        if self.popup_on(self.outs[oi].info.id) {
+            self.lose_popup();
         }
-        self.outs.retain(|o| o.wl != output);
+        self.outs.remove(oi);
     }
 }
 
@@ -644,7 +1049,14 @@ impl LayerShellHandler for Engine {
     /// The compositor closes a layer surface mainly when its output goes
     /// away, so the whole output is dropped instead of a single surface.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self.is_popup_layer(layer) {
+            self.lose_popup();
+            return;
+        }
         if let Some((oi, _)) = self.find_layer(layer) {
+            if self.popup_on(self.outs[oi].info.id) {
+                self.lose_popup();
+            }
             let out = self.outs.remove(oi);
             info!(monitor = %name(&out.info), "surface closed, monitor dropped");
         }
@@ -662,20 +1074,27 @@ impl LayerShellHandler for Engine {
         c: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if self.is_popup_layer(layer) {
+            self.configure_popup(c.new_size);
+            return;
+        }
         let Some((oi, si)) = self.find_layer(layer) else {
             return;
         };
         let surf = &mut self.outs[oi].surfaces[si];
+        let Role::Layer { spec, .. } = &surf.role else {
+            return;
+        };
         let size = (
             if c.new_size.0 > 0 {
                 c.new_size.0
             } else {
-                surf.spec.size.0
+                spec.size.0
             },
             if c.new_size.1 > 0 {
                 c.new_size.1
             } else {
-                surf.spec.size.1
+                spec.size.1
             },
         );
         if surf.configured && surf.size == size {
@@ -683,7 +1102,7 @@ impl LayerShellHandler for Engine {
         }
         surf.size = size;
         surf.configured = true;
-        self.draw(oi, si);
+        self.draw(Target::Layer(oi, si));
     }
 }
 
@@ -697,7 +1116,7 @@ impl ProvidesRegistryState for Engine {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_compositor!(Engine);
@@ -720,9 +1139,25 @@ mod tests {
     }
 
     #[test]
+    fn a_length_left_to_the_compositor_counts_as_staying() {
+        assert!(resized((1920, 44), (0, 60)));
+        assert!(resized((600, 44), (800, 44)));
+        assert!(!resized((1920, 44), (0, 44)));
+        assert!(!resized((600, 44), (600, 44)));
+        // From down the left to along the top: the thickness changes axis.
+        assert!(resized((44, 1080), (0, 44)));
+    }
+
+    #[test]
     fn everything_is_every_surface_of_every_output() {
         let outs = [(OutputId(7), 2), (OutputId(9), 1)];
-        assert_eq!(targets(&outs, Redraw::Everything), [(0, 0), (0, 1), (1, 0)]);
+        let everything = [
+            Target::Layer(0, 0),
+            Target::Layer(0, 1),
+            Target::Layer(1, 0),
+            Target::Popup,
+        ];
+        assert_eq!(targets(&outs, Redraw::Everything), everything);
         assert_eq!(targets(&outs, Redraw::Nothing), []);
     }
 
@@ -730,22 +1165,25 @@ mod tests {
     fn a_surface_asked_for_twice_is_drawn_once() {
         let outs = [(OutputId(7), 2), (OutputId(9), 1)];
         let twice = Redraw::Surfaces(vec![
-            (OutputId(9), SurfaceId(0)),
-            (OutputId(7), SurfaceId(1)),
-            (OutputId(9), SurfaceId(0)),
+            On::Surface(OutputId(9), SurfaceId(0)),
+            On::Popup,
+            On::Surface(OutputId(7), SurfaceId(1)),
+            On::Surface(OutputId(9), SurfaceId(0)),
+            On::Popup,
         ]);
-        assert_eq!(targets(&outs, twice), [(0, 1), (1, 0)]);
+        let once = [Target::Layer(0, 1), Target::Layer(1, 0), Target::Popup];
+        assert_eq!(targets(&outs, twice), once);
     }
 
     #[test]
     fn surfaces_that_are_gone_are_left_out() {
         let outs = [(OutputId(7), 1)];
         let gone = Redraw::Surfaces(vec![
-            (OutputId(8), SurfaceId(0)),
-            (OutputId(7), SurfaceId(1)),
-            (OutputId(7), SurfaceId(0)),
+            On::Surface(OutputId(8), SurfaceId(0)),
+            On::Surface(OutputId(7), SurfaceId(1)),
+            On::Surface(OutputId(7), SurfaceId(0)),
         ]);
-        assert_eq!(targets(&outs, gone), [(0, 0)]);
+        assert_eq!(targets(&outs, gone), [Target::Layer(0, 0)]);
     }
 
     #[test]
@@ -755,7 +1193,7 @@ mod tests {
             std::env::remove_var("WAYLAND_SOCKET");
             std::env::set_var("WAYLAND_DISPLAY", "tonish-no-such-display");
         }
-        let err = run(Box::new(Nothing), Gpu::default()).unwrap_err();
+        let err = run(Box::new(Nothing), Options::default()).unwrap_err();
         assert!(err.starts_with("no Wayland display"), "{err}");
     }
 }

@@ -19,6 +19,9 @@ use khronos_egl as egl;
 use renderer::Scene;
 use renderer::gpu::{Gpu, Unsupported};
 use tracing::{debug, info};
+
+use crate::app::{Drawn, On};
+use crate::wayland::Target;
 use wayland_client::{Connection, Proxy, protocol::wl_surface::WlSurface};
 
 /// From EGL_KHR_platform_wayland, which khronos-egl has no constant for.
@@ -121,8 +124,11 @@ impl Drop for Display {
 
 /// What the GPU's thread tells the engine.
 pub(crate) enum Report {
-    /// It takes frames from now on.
-    Started,
+    /// It takes frames from now on, on this device.
+    Started(String),
+    /// A frame is on the screen's way, for the app's statistics, and when the
+    /// engine sent it, to tell what was committed before it.
+    Drew(On, Drawn, Instant),
     /// It failed, to start or later, and has ended. Every window was gone
     /// before it said so, so the engine may destroy the surfaces.
     Failed(String),
@@ -137,7 +143,8 @@ pub(crate) struct Frame {
     pub(crate) scene: Scene,
     /// The rest is for the log.
     pub(crate) monitor: String,
-    pub(crate) index: usize,
+    pub(crate) target: Target,
+    pub(crate) on: On,
     /// How long the engine took to build the scene, which the log counts
     /// with the drawing, as for a frame the CPU draws.
     pub(crate) built: Duration,
@@ -148,6 +155,7 @@ pub(crate) struct Frame {
 
 enum Command {
     Draw(u64, Frame),
+    Commit(WlSurface),
     /// Destroys the surface's window, then answers.
     Forget(u64, mpsc::Sender<()>),
     Quit,
@@ -225,6 +233,17 @@ impl Window {
     }
 }
 
+impl Window {
+    /// Commits the surface's pending state on the GPU's thread, between its
+    /// frames. A commit on another thread could fall between a frame's
+    /// attach and its commit, and a compositor with explicit sync ends the
+    /// connection for a buffer committed without its sync point.
+    pub(crate) fn commit(&self, surface: WlSurface) {
+        // Fails only once the thread has ended, which it reports.
+        let _ = self.commands.send(Command::Commit(surface));
+    }
+}
+
 impl Drop for Window {
     fn drop(&mut self) {
         let (done, gone) = mpsc::channel();
@@ -244,7 +263,7 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
             return;
         }
     };
-    let _ = report.send(Report::Started);
+    let _ = report.send(Report::Started(gles.gpu.device()));
     let mut windows = HashMap::new();
     let mut frames: Vec<(u64, Frame)> = Vec::new();
     while let Ok(first) = commands.recv() {
@@ -253,6 +272,13 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
                 Command::Draw(key, frame) => {
                     frames.retain(|(k, _)| *k != key);
                     frames.push((key, frame));
+                }
+                Command::Commit(surface) => {
+                    surface.commit();
+                    // No frame need follow to flush it, as eglSwapBuffers
+                    // would, and the main thread's flush may have gone by
+                    // already. A broken connection shows on the main thread.
+                    let _ = conn.flush();
                 }
                 Command::Forget(key, done) => {
                     frames.retain(|(k, _)| *k != key);
@@ -263,10 +289,15 @@ fn run(conn: &Connection, commands: &mpsc::Receiver<Command>, report: &Sender<Re
             }
         }
         for (key, frame) in frames.drain(..) {
-            if let Err(e) = gles.draw(&mut windows, key, frame) {
-                windows.clear();
-                let _ = report.send(Report::Failed(e));
-                return;
+            match gles.draw(&mut windows, key, frame) {
+                Ok((on, drawn, sent)) => {
+                    let _ = report.send(Report::Drew(on, drawn, sent));
+                }
+                Err(e) => {
+                    windows.clear();
+                    let _ = report.send(Report::Failed(e));
+                    return;
+                }
             }
         }
     }
@@ -318,42 +349,51 @@ impl Gles {
         windows: &mut HashMap<u64, EglWindow>,
         key: u64,
         frame: Frame,
-    ) -> Result<(), String> {
+    ) -> Result<(On, Drawn, Instant), String> {
         let waited = frame.sent.elapsed();
-        let window = match windows.entry(key) {
-            Entry::Occupied(window) => window.into_mut(),
+        let (window, fresh) = match windows.entry(key) {
+            Entry::Occupied(window) => (window.into_mut(), false),
             Entry::Vacant(entry) => {
                 let started = Instant::now();
-                let mut window = EglWindow::new(&self.display, &frame.surface, frame.size)?;
-                // Twice ahead, back to back, so that EGL allocates the three
-                // buffers a fast animation needs now, while the surface
-                // shows the same image, rather than at an animation's first
-                // frames: each allocation stalls the swap for 0.2 to 2 ms,
-                // measured with NVIDIA's driver.
-                for _ in 0..2 {
-                    self.show(&mut window, &frame)?;
-                }
+                let window = EglWindow::new(&self.display, &frame.surface, frame.size)?;
                 debug!(
                     monitor = %frame.monitor,
-                    surface = frame.index,
+                    surface = %frame.target,
                     took = ?started.elapsed(),
                     "moved to the GPU"
                 );
-                entry.insert(window)
+                (entry.insert(window), true)
             }
         };
         let started = Instant::now();
         let on = self.show(window, &frame)?;
+        let took = frame.built + started.elapsed();
         debug!(
             monitor = %frame.monitor,
-            surface = frame.index,
+            surface = %frame.target,
             size = ?frame.size,
             on = %on,
-            took = ?(frame.built + started.elapsed()),
+            took = ?took,
             waited = ?waited,
             "drew"
         );
-        Ok(())
+        let drawn = Drawn {
+            took,
+            waited,
+            gpu: on == "gpu",
+        };
+        // Twice more, back to back, so that EGL allocates the three buffers a
+        // fast animation needs now, while the surface shows the same image,
+        // rather than at an animation's first frames: each allocation stalls
+        // the swap for 0.2 to 2 ms, measured with NVIDIA's driver. After the
+        // first frame rather than before, so that the surface shows without
+        // waiting for them.
+        if fresh {
+            for _ in 0..2 {
+                self.show(window, &frame)?;
+            }
+        }
+        Ok((frame.on, drawn, frame.sent))
     }
 
     /// Draws the frame and commits the surface, which the buffer swap

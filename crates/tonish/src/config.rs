@@ -1,58 +1,387 @@
+//! The settings are a Luau script that returns a table of them. It runs once
+//! for every monitor, with `monitor` describing it, so that a setting can
+//! follow the monitor, such as a bar a set distance shorter than the monitor
+//! is wide.
+//!
 //! The shipped file is compiled in, so that the built-in settings and the
 //! file a first start writes can never disagree, and so that tonish needs no
 //! file beside its binary, wherever it gets installed.
 
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
+use engine::{Output, OutputId};
+use mlua::{Lua, Table, Value, VmState};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 
 use crate::shell::Orientation;
 
-pub const DEFAULT: &str = include_str!("../../../assets/default-config.toml");
+pub const DEFAULT: &str = include_str!("../../../assets/default-config.luau");
+/// The settings' types for luau-lsp. They change with the settings, and
+/// [`write_types`] keeps the copy beside the user's file current.
+pub const TYPES: &str = include_str!("../../../assets/tonish.d.luau");
 
-// deny_unknown_fields, so that a misspelt setting is an error instead of
-// being ignored without a word.
+/// The global `Orientation`, which `tonish.d.luau` declares too: its
+/// constants and the values they stand for, as [`Orientation`] reads them.
+/// Constants rather than strings, so that luau-lsp completes them.
+const ORIENTATION: [(&str, &str); 2] = [("Horizontal", "horizontal"), ("Vertical", "vertical")];
+
+/// Settings take a few lines of arithmetic at most, so a script that runs
+/// this long is stuck, and would freeze the shell.
+const TIME: Duration = Duration::from_millis(500);
+/// The same, for a script that keeps allocating.
+const MEMORY: usize = 64 << 20;
+
+/// Every field is required: the shipped file's table is merged under the
+/// script's before this is read, so a setting the script leaves out has its
+/// default here. deny_unknown_fields, here and in the sections, so that a
+/// misspelt setting is an error instead of being ignored without a word.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// One width for the bar and every panel, so that the bar's line always
+    /// runs on round the panels that hang from it.
+    #[serde(deserialize_with = "border")]
+    pub border: f32,
+    pub bar: Bar,
+    pub panel: Panels,
+    pub animation: Animation,
+    pub hud: Hud,
+}
+
+/// The figures in the top left corner. `tonish msg hud` overrides `show`
+/// until a save changes it.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hud {
+    pub show: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Animation {
+    /// 0 draws every frame the compositor offers, at the monitor's refresh
+    /// rate.
+    #[serde(deserialize_with = "max_fps")]
+    pub max_fps: f32,
+    pub popout: Motion,
+    pub fold: Motion,
+    pub drag: Motion,
+    pub detaching: Detaching,
+    pub attaching: Attaching,
+    pub wobble: Wobble,
+    pub ripples: Ripples,
+}
+
+/// A spring, as [`crate::motion::Spring::aim`] takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Detaching {
+    /// Logical pixels the card's middle goes out from where it hangs
+    /// before the neck breaks.
+    #[serde(deserialize_with = "distance")]
+    pub distance: f32,
+    #[serde(deserialize_with = "pull")]
+    pub pull: f32,
+    /// A multiple of the shipped neck's width.
+    #[serde(deserialize_with = "thickness_share")]
+    pub thickness: f32,
+    /// Pixels a second.
+    #[serde(deserialize_with = "kick")]
+    pub kick: f32,
+}
+
+/// Flat rather than a [`Motion`] and a kick, since deny_unknown_fields
+/// doesn't work with serde's flatten.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attaching {
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+    #[serde(deserialize_with = "kick")]
+    pub kick: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Wobble {
+    #[serde(deserialize_with = "amount")]
+    pub amount: f32,
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+/// The waves on the bar's edge, and the [`Motion`] it rings with when
+/// kicked.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ripples {
+    #[serde(deserialize_with = "height")]
+    pub height: f32,
+    #[serde(deserialize_with = "duration")]
+    pub duration: f32,
+    #[serde(deserialize_with = "stiffness")]
+    pub stiffness: f32,
+    #[serde(deserialize_with = "damping")]
+    pub damping: f32,
+}
+
+impl Attaching {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
+}
+
+impl Wobble {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
+}
+
+impl Ripples {
+    pub fn motion(&self) -> Motion {
+        Motion {
+            stiffness: self.stiffness,
+            damping: self.damping,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bar {
+    #[serde(deserialize_with = "orientation")]
     pub orientation: Orientation,
     #[serde(deserialize_with = "thickness")]
     pub thickness: f32,
+    /// 0 spans the monitor.
+    #[serde(deserialize_with = "length")]
+    pub length: f32,
+    #[serde(deserialize_with = "gap")]
+    pub gap: f32,
+    /// Top left, top right, bottom right, bottom left, as CSS and
+    /// [`RoundedRect`](renderer::RoundedRect) order them.
+    #[serde(deserialize_with = "radius")]
+    pub radius: [f32; 4],
+    /// 0 leaves out the concave corners.
+    #[serde(deserialize_with = "inverse_radius")]
+    pub inverse_radius: f32,
 }
 
-/// The shipped file, so that the defaults live in one place, the file users
-/// get. The tests make sure it parses.
+/// What every panel that opens from the bar has in common. A panel always
+/// touches the bar, so it has no gap.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Panels {
+    /// In the order of [`Bar::radius`].
+    #[serde(deserialize_with = "radius")]
+    pub radius: [f32; 4],
+    #[serde(deserialize_with = "inverse_radius")]
+    pub inverse_radius: f32,
+}
+
+/// For a script read before any monitor is known: it has to run for some
+/// monitor, and a broken file should stop tonish at its start, not at its
+/// first monitor.
+pub fn stand_in() -> Output {
+    Output {
+        id: OutputId(0),
+        name: None,
+        size: (1920.0, 1080.0),
+        scale: 1,
+    }
+}
+
+/// The shipped file's settings, for the stand-in monitor.
 impl Default for Config {
     fn default() -> Self {
-        parse(DEFAULT).expect("the shipped default-config.toml parses")
+        evaluate(DEFAULT, "=default-config.luau", &stand_in())
+            .expect("the shipped default-config.luau runs")
     }
 }
 
-/// Sizes are cut to whole pixels, so a thickness under 1 would ask for size 0
-/// along an axis the panel is not anchored on both sides of. That is a
-/// layer-shell protocol error that gets tonish disconnected. Checked while
-/// parsing, so that the error names the line.
-fn thickness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
-    let t = f32::deserialize(d)?;
-    if t >= 1.0 {
-        Ok(t)
-    } else {
-        Err(D::Error::custom(format!(
-            "thickness {t} is less than 1 pixel"
-        )))
+/// Runs the script for `monitor`. `name` is the chunk name its errors
+/// start with, `@` and a path for a file.
+pub fn evaluate(text: &str, name: &str, monitor: &Output) -> Result<Config, String> {
+    let lua = state(monitor).map_err(|e| format!("cannot run the settings: {e}"))?;
+    let shipped = run(&lua, DEFAULT, "=default-config.luau")?;
+    let mine = run(&lua, text, name)?;
+    merge(&shipped, &mine).map_err(message)?;
+    // With the path to the setting, such as bar.thickness, because the table
+    // no longer knows the lines its values came from.
+    let settings = mlua::serde::Deserializer::new(Value::Table(shipped));
+    serde_path_to_error::deserialize::<_, Config>(settings).map_err(|e| {
+        let at = e.path().to_string();
+        let what = match e.into_inner() {
+            mlua::Error::DeserializeError(e) => e,
+            e => e.to_string(),
+        };
+        let file = name.trim_start_matches(['@', '=']);
+        if at == "." {
+            format!("{file}: {what}")
+        } else {
+            format!("{file}: {at}: {what}")
+        }
+    })
+}
+
+/// A fresh state for every run, so that nothing one run leaves behind
+/// reaches the next.
+fn state(monitor: &Output) -> mlua::Result<Lua> {
+    let lua = Lua::new();
+    let m = lua.create_table()?;
+    m.set("name", monitor.name.clone())?;
+    m.set("width", monitor.size.0)?;
+    m.set("height", monitor.size.1)?;
+    m.set("scale", monitor.scale)?;
+    // Before the sandbox, which makes the globals read-only.
+    lua.globals().set("monitor", m)?;
+    constants(&lua, "Orientation", &ORIENTATION)?;
+    lua.sandbox(true)?;
+    lua.set_memory_limit(MEMORY)?;
+    let started = Instant::now();
+    lua.set_interrupt(move |_| {
+        if started.elapsed() > TIME {
+            Err(mlua::Error::runtime(format!(
+                "the settings ran for longer than {} ms",
+                TIME.as_millis()
+            )))
+        } else {
+            Ok(VmState::Continue)
+        }
+    });
+    Ok(lua)
+}
+
+/// A misspelt constant is an error, where a plain table would give `nil`,
+/// which reads as a setting left out and quietly takes its default. In Luau
+/// rather than Rust, so that `error` can name the script's line: level 2 is
+/// the code that looked the constant up.
+fn constants(lua: &Lua, name: &str, values: &[(&str, &str)]) -> mlua::Result<()> {
+    let table = lua.create_table()?;
+    for (constant, value) in values {
+        table.set(*constant, *value)?;
+    }
+    let known = values
+        .iter()
+        .map(|(c, _)| *c)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let guard: mlua::Function = lua
+        .load(
+            "local name, known = ...\n\
+             return function(_, key)\n\
+                 error(`{name} has no {key}, only {known}`, 2)\n\
+             end",
+        )
+        .call((name, known))?;
+    let meta = lua.create_table()?;
+    meta.set("__index", guard)?;
+    table.set_metatable(Some(meta))?;
+    lua.globals().set(name, table)
+}
+
+fn run(lua: &Lua, text: &str, name: &str) -> Result<Table, String> {
+    let file = name.trim_start_matches(['@', '=']);
+    match lua.load(text).set_name(name).eval::<Value>() {
+        Ok(Value::Table(table)) => Ok(table),
+        Ok(other) => Err(format!(
+            "{file}: returns {}, not a table of settings",
+            other.type_name()
+        )),
+        Err(e) => {
+            // The traceback only repeats the line for a script this short,
+            // and would spread one log message over several lines.
+            let e = message(e);
+            let e = e.split("\nstack traceback:").next().unwrap_or_default();
+            // Luau puts the file and line before its own errors, but not
+            // before the time and memory limits' errors, which have none.
+            if e.starts_with(file) {
+                Err(e.into())
+            } else {
+                Err(format!("{file}: {e}"))
+            }
+        }
     }
 }
 
-pub fn parse(text: &str) -> Result<Config, String> {
-    toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())
+/// Section by section, at every depth, so that a section the script sets in
+/// part keeps the shipped values of the rest. A radius is one value even as
+/// a table: the corners it leaves out are square, not the shipped ones.
+fn merge(shipped: &Table, mine: &Table) -> mlua::Result<()> {
+    for pair in mine.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        let radius = key
+            .as_string()
+            .is_some_and(|k| k.to_string_lossy() == "radius");
+        match (shipped.get::<Value>(key.clone())?, &value) {
+            (Value::Table(section), Value::Table(settings)) if !radius => {
+                merge(&section, settings)?;
+            }
+            _ => shipped.set(key, value)?,
+        }
+    }
+    Ok(())
 }
 
-pub fn read(path: &Path) -> Result<Config, String> {
+/// Luau's own text, which names the file and the line, without mlua's
+/// wording around it.
+fn message(e: mlua::Error) -> String {
+    match e {
+        mlua::Error::SyntaxError { message, .. } | mlua::Error::RuntimeError(message) => message,
+        mlua::Error::MemoryError(_) => {
+            format!("the settings used more than {} MiB of memory", MEMORY >> 20)
+        }
+        mlua::Error::CallbackError { cause, .. } => message((*cause).clone()),
+        e => e.to_string(),
+    }
+}
+
+/// Also checks that it runs, for the stand-in monitor.
+pub fn read(path: &Path) -> Result<String, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+    evaluate(&text, &chunk(path), &stand_in())?;
+    Ok(text)
+}
+
+/// The chunk name that makes Luau's errors start with the file's path.
+pub fn chunk(path: &Path) -> String {
+    format!("@{}", path.display())
+}
+
+/// Into `dir`, beside the settings, where an editor that opens them finds it.
+/// Only when it differs, so that an unchanged copy keeps its time and the
+/// editor has nothing to reload. Returns whether it wrote it.
+pub fn write_types(dir: &Path) -> std::io::Result<bool> {
+    let path = dir.join("tonish.d.luau");
+    if fs::read_to_string(&path).is_ok_and(|text| text == TYPES) {
+        return Ok(false);
+    }
+    fs::write(path, TYPES)?;
+    Ok(true)
 }
 
 /// `create_new`, so that a file the user wrote is never overwritten, not even
@@ -68,76 +397,525 @@ pub fn install(path: &Path) -> std::io::Result<()> {
         .write_all(DEFAULT.as_bytes())
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Radius {
+    Every(f32),
+    Each(HashMap<String, f32>),
+}
+
+/// In the order of [`Bar::radius`].
+const CORNERS: [&str; 4] = ["top_left", "top_right", "bottom_right", "bottom_left"];
+
+/// Sizes are cut to whole pixels, so a thickness under 1 would ask for size 0
+/// along an axis the bar is not anchored on both sides of. That is a
+/// layer-shell protocol error that gets tonish disconnected.
+fn thickness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let t = f32::deserialize(d)?;
+    if t >= 1.0 {
+        Ok(t)
+    } else {
+        Err(D::Error::custom(format!(
+            "thickness {t} is less than 1 pixel"
+        )))
+    }
+}
+
+/// Between 0 and 1 the bar would get size 0 along its length, the same
+/// protocol error as a thickness under 1.
+fn length<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let l = f32::deserialize(d)?;
+    if l == 0.0 || l >= 1.0 {
+        Ok(l)
+    } else {
+        Err(D::Error::custom(format!(
+            "length {l} is neither 0 nor at least 1 pixel"
+        )))
+    }
+}
+
+/// One number for every corner, or a table of corners by name, so that
+/// nobody has to remember an order. A corner the table leaves out is square
+/// rather than the default, so that `{ bottom_left = 14, bottom_right = 14 }`
+/// rounds those two alone. serde's own error for an untagged enum names
+/// neither form, so this one does.
+fn radius<'de, D: Deserializer<'de>>(d: D) -> Result<[f32; 4], D::Error> {
+    let corners = match Radius::deserialize(d).map_err(|_| {
+        D::Error::custom(
+            "radius takes one number for every corner, or a table of them, such as \
+             { top_left = 12, top_right = 12 }",
+        )
+    })? {
+        Radius::Every(r) => [r; 4],
+        Radius::Each(mut named) => {
+            let corners = CORNERS.map(|c| named.remove(c).unwrap_or(0.0));
+            if let Some(other) = named.keys().min() {
+                return Err(D::Error::custom(format!(
+                    "radius has no corner `{other}`, only `top_left`, `top_right`, \
+                     `bottom_right` and `bottom_left`"
+                )));
+            }
+            corners
+        }
+    };
+    for r in corners {
+        not_negative::<D::Error>("radius", r)?;
+    }
+    Ok(corners)
+}
+
+/// serde's own error names the strings, which the shipped file doesn't use.
+fn orientation<'de, D: Deserializer<'de>>(d: D) -> Result<Orientation, D::Error> {
+    Orientation::deserialize(d).map_err(|_| {
+        let known: Vec<_> = ORIENTATION
+            .iter()
+            .map(|(c, _)| format!("Orientation.{c}"))
+            .collect();
+        D::Error::custom(format!("orientation takes {}", known.join(" or ")))
+    })
+}
+
+fn max_fps<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("max_fps", f32::deserialize(d)?)
+}
+
+/// 0 would never move, and leave a panel that never opens or closes.
+fn stiffness<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("stiffness", 1.0, f32::deserialize(d)?)
+}
+
+/// 0 would never come to rest, and draw for good.
+fn damping<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("damping", 0.05, f32::deserialize(d)?)
+}
+
+/// The neck starts 14 pixels out, where the card leaves the bar.
+fn distance<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    at_least("distance", 20.0, f32::deserialize(d)?)
+}
+
+/// At 1 the bar would hold the card where it hangs, and it could never be
+/// pulled off.
+fn pull<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let p = f32::deserialize(d)?;
+    if (0.0..=0.9).contains(&p) {
+        Ok(p)
+    } else {
+        Err(D::Error::custom(format!("pull {p} is outside 0 to 0.9")))
+    }
+}
+
+fn thickness_share<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("thickness", f32::deserialize(d)?)
+}
+
+fn kick<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("kick", f32::deserialize(d)?)
+}
+
+fn amount<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("amount", f32::deserialize(d)?)
+}
+
+fn height<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("height", f32::deserialize(d)?)
+}
+
+fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("duration", f32::deserialize(d)?)
+}
+
+fn at_least<E: Error>(name: &str, least: f32, value: f32) -> Result<f32, E> {
+    if value >= least {
+        Ok(value)
+    } else {
+        Err(E::custom(format!("{name} {value} is less than {least}")))
+    }
+}
+
+fn gap<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("gap", f32::deserialize(d)?)
+}
+
+fn inverse_radius<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("inverse_radius", f32::deserialize(d)?)
+}
+
+fn border<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("border", f32::deserialize(d)?)
+}
+
+fn not_negative<E: Error>(name: &str, value: f32) -> Result<f32, E> {
+    if value >= 0.0 {
+        Ok(value)
+    } else {
+        Err(E::custom(format!("{name} {value} is negative")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::{Anchor, Shell};
+
+    fn settings(text: &str) -> Result<Config, String> {
+        evaluate(text, "=config.luau", &stand_in())
+    }
+
+    fn on(width: f32, name: &str) -> Output {
+        Output {
+            id: OutputId(1),
+            name: Some(name.into()),
+            size: (width, 1080.0),
+            scale: 2,
+        }
+    }
 
     #[test]
-    fn the_shipped_settings_are_a_horizontal_panel_44_pixels_thick() {
+    fn the_shipped_settings_are_a_plain_bar_and_rounded_panels() {
         let want = Config {
-            orientation: Orientation::Horizontal,
-            thickness: 44.0,
+            border: 0.0,
+            bar: Bar {
+                orientation: Orientation::Horizontal,
+                thickness: 44.0,
+                length: 0.0,
+                gap: 0.0,
+                radius: [0.0; 4],
+                inverse_radius: 0.0,
+            },
+            panel: Panels {
+                radius: [14.0; 4],
+                inverse_radius: 14.0,
+            },
+            animation: Animation {
+                max_fps: 0.0,
+                popout: Motion {
+                    stiffness: 260.0,
+                    damping: 0.5,
+                },
+                fold: Motion {
+                    stiffness: 420.0,
+                    damping: 0.85,
+                },
+                drag: Motion {
+                    stiffness: 420.0,
+                    damping: 0.6,
+                },
+                detaching: Detaching {
+                    distance: 140.0,
+                    pull: 0.35,
+                    thickness: 1.0,
+                    kick: 260.0,
+                },
+                attaching: Attaching {
+                    stiffness: 320.0,
+                    damping: 0.45,
+                    kick: 200.0,
+                },
+                wobble: Wobble {
+                    amount: 1.0,
+                    stiffness: 220.0,
+                    damping: 0.22,
+                },
+                ripples: Ripples {
+                    height: 7.0,
+                    duration: 1.5,
+                    stiffness: 400.0,
+                    damping: 0.25,
+                },
+            },
+            hud: Hud { show: true },
         };
         assert_eq!(Config::default(), want);
     }
 
+    /// The defaults of the settings a script leaves out come from the
+    /// shipped file, so it has to set every one.
     #[test]
-    fn a_vertical_panel_runs_down_the_left() {
-        let shell = Shell::new(parse("orientation = \"vertical\"\nthickness = 30").unwrap());
-        let panel = &shell.screens[0].panels[0];
+    fn the_shipped_file_sets_every_setting() {
+        let lua = state(&stand_in()).unwrap();
+        let shipped = run(&lua, DEFAULT, "=default-config.luau").unwrap();
+        let keys = |table: &Table| -> Vec<String> {
+            let mut keys: Vec<String> = table
+                .pairs::<String, Value>()
+                .map(|p| p.unwrap().0)
+                .collect();
+            keys.sort();
+            keys
+        };
         assert_eq!(
-            (panel.anchor, panel.orientation, panel.thickness),
-            (Anchor::Left, Orientation::Vertical, 30.0)
+            keys(&shipped),
+            ["animation", "bar", "border", "hud", "panel"]
+        );
+        let animation: Table = shipped.get("animation").unwrap();
+        let motions = [
+            "attaching",
+            "detaching",
+            "drag",
+            "fold",
+            "max_fps",
+            "popout",
+            "ripples",
+            "wobble",
+        ];
+        assert_eq!(keys(&animation), motions);
+        let spring = ["damping", "stiffness"];
+        for motion in ["popout", "fold", "drag"] {
+            assert_eq!(keys(&animation.get(motion).unwrap()), spring, "{motion}");
+        }
+        let detaching = ["distance", "kick", "pull", "thickness"];
+        assert_eq!(keys(&animation.get("detaching").unwrap()), detaching);
+        let attaching = ["damping", "kick", "stiffness"];
+        assert_eq!(keys(&animation.get("attaching").unwrap()), attaching);
+        let wobble = ["amount", "damping", "stiffness"];
+        assert_eq!(keys(&animation.get("wobble").unwrap()), wobble);
+        let ripples = ["damping", "duration", "height", "stiffness"];
+        assert_eq!(keys(&animation.get("ripples").unwrap()), ripples);
+        assert_eq!(keys(&shipped.get("hud").unwrap()), ["show"]);
+        let bar = [
+            "gap",
+            "inverse_radius",
+            "length",
+            "orientation",
+            "radius",
+            "thickness",
+        ];
+        assert_eq!(keys(&shipped.get("bar").unwrap()), bar);
+        assert_eq!(
+            keys(&shipped.get("panel").unwrap()),
+            ["inverse_radius", "radius"]
         );
     }
 
     #[test]
-    fn both_settings_are_needed() {
-        let err = parse("thickness = 44").unwrap_err();
-        assert!(err.contains("missing field `orientation`"), "{err}");
+    fn the_types_name_every_setting_and_constant() {
+        let lua = state(&stand_in()).unwrap();
+        let shipped = run(&lua, DEFAULT, "=default-config.luau").unwrap();
+        fn named(table: &Table) {
+            for pair in table.pairs::<String, Value>() {
+                let (key, value) = pair.unwrap();
+                assert!(TYPES.contains(&format!("{key}: ")), "{key}");
+                if let Value::Table(section) = value {
+                    named(&section);
+                }
+            }
+        }
+        named(&shipped);
+        for (constant, value) in ORIENTATION {
+            assert!(TYPES.contains(&format!("{constant}: Orientation")));
+            assert!(TYPES.contains(&format!("\"{value}\"")));
+        }
     }
 
     #[test]
-    fn a_misspelt_setting_is_an_error_naming_it_and_its_line() {
-        let err = parse("orientation = \"vertical\"\nthicknes = 44\n").unwrap_err();
-        assert!(err.contains("thicknes") && err.contains("line 2"), "{err}");
+    fn a_constant_stands_for_its_value() {
+        let vertical = "return { bar = { orientation = Orientation.Vertical } }";
+        assert_eq!(
+            settings(vertical).unwrap().bar.orientation,
+            Orientation::Vertical
+        );
+        for (constant, _) in ORIENTATION {
+            let text = format!("return {{ bar = {{ orientation = Orientation.{constant} }} }}");
+            settings(&text).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_misspelt_constant_is_an_error_naming_its_line() {
+        let text = "local wide = true\nreturn { bar = { orientation = Orientation.Horizonal } }";
+        let err = settings(text).unwrap_err();
+        assert!(err.starts_with("config.luau:2: "), "{err}");
+        assert!(
+            err.ends_with("Orientation has no Horizonal, only Horizontal, Vertical"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_setting_left_out_takes_the_shipped_value() {
+        let config = settings("return { border = 2.5, bar = { thickness = 30 } }").unwrap();
+        let shipped = Config::default();
+        assert_eq!((config.border, config.bar.thickness), (2.5, 30.0));
+        assert_eq!(config.bar.orientation, shipped.bar.orientation);
+        assert_eq!(config.panel, shipped.panel);
+        assert_eq!(settings("return {}").unwrap(), shipped);
+    }
+
+    #[test]
+    fn a_motion_set_in_part_keeps_the_shipped_rest() {
+        let config = settings("return { animation = { popout = { damping = 0.3 } } }").unwrap();
+        let shipped = Config::default().animation;
+        assert_eq!(config.animation.popout.damping, 0.3);
+        assert_eq!(config.animation.popout.stiffness, shipped.popout.stiffness);
+        assert_eq!(config.animation.ripples, shipped.ripples);
+    }
+
+    #[test]
+    fn a_setting_can_follow_the_monitor() {
+        let text = r#"
+            local wide = monitor.width > 3000
+            return {
+                bar = {
+                    length = monitor.width - 600,
+                    thickness = if monitor.name == "DP-1" then 30 else 44,
+                    radius = if wide then 12 else 6,
+                },
+            }
+        "#;
+        let config = evaluate(text, "=config.luau", &on(1920.0, "DP-1")).unwrap();
+        assert_eq!((config.bar.length, config.bar.thickness), (1320.0, 30.0));
+        assert_eq!(config.bar.radius, [6.0; 4]);
+        let wide = evaluate(text, "=config.luau", &on(3440.0, "HDMI-A-1")).unwrap();
+        assert_eq!((wide.bar.thickness, wide.bar.radius), (44.0, [12.0; 4]));
+    }
+
+    #[test]
+    fn a_radius_is_one_for_every_corner_or_a_table_of_them() {
+        let one = settings("return { bar = { radius = 6 } }").unwrap();
+        assert_eq!(one.bar.radius, [6.0; 4]);
+        let named = r#"return { panel = { radius = {
+            top_left = 1, top_right = 2, bottom_right = 3, bottom_left = 4,
+        } } }"#;
+        assert_eq!(settings(named).unwrap().panel.radius, [1.0, 2.0, 3.0, 4.0]);
+        let two = "return { panel = { radius = { bottom_left = 14, bottom_right = 14 } } }";
+        assert_eq!(settings(two).unwrap().panel.radius, [0.0, 0.0, 14.0, 14.0]);
+        let none = settings("return { panel = { radius = {} } }").unwrap();
+        assert_eq!(none.panel.radius, [0.0; 4]);
+    }
+
+    #[test]
+    fn a_misspelt_setting_is_an_error_naming_it_and_the_right_ones() {
+        let err = settings("return { bar = { thicknes = 44 } }").unwrap_err();
+        assert!(
+            err.contains("`thicknes`") && err.contains("`thickness`"),
+            "{err}"
+        );
+        let err = settings("return { thickness = 44 }").unwrap_err();
+        assert!(err.contains("`bar`") && err.contains("`panel`"), "{err}");
+    }
+
+    #[test]
+    fn broken_luau_is_an_error_naming_its_line() {
+        let err = settings("return {\n  bar = { thickness = }\n}").unwrap_err();
+        assert!(err.starts_with("config.luau:2"), "{err}");
+        let err = settings("local x = monitor.nope + 1\nreturn {}").unwrap_err();
+        assert!(err.starts_with("config.luau:1"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+    }
+
+    #[test]
+    fn a_script_that_returns_no_table_is_an_error() {
+        let err = settings("return 5").unwrap_err();
+        assert!(err.contains("not a table"), "{err}");
+    }
+
+    #[test]
+    fn a_script_that_never_ends_is_stopped() {
+        let started = Instant::now();
+        let err = settings("while true do end\nreturn {}").unwrap_err();
+        assert!(
+            err.starts_with("config.luau: ") && err.contains("longer than"),
+            "{err}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_script_cannot_change_what_every_run_sees() {
+        let err = settings("monitor.width = 1\nreturn {}").unwrap_err();
+        assert!(
+            err.contains("readonly") || err.contains("read-only"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_error_names_the_setting() {
+        let err = settings(r#"return { bar = { thickness = "wide" } }"#).unwrap_err();
+        assert!(err.starts_with("config.luau: bar.thickness: "), "{err}");
     }
 
     #[test]
     fn wrong_values_are_errors() {
         for (text, says) in [
-            ("orientation = \"diagonal\"\nthickness = 44", "diagonal"),
-            ("orientation = \"vertical\"\nthickness = 0", "less than 1"),
-            ("orientation = \"vertical\"\nthickness = -4", "less than 1"),
             (
-                "orientation = \"vertical\"\nthickness = \"wide\"",
-                "thickness",
+                "bar = { orientation = \"diagonal\" }",
+                "Orientation.Horizontal or Orientation.Vertical",
             ),
+            ("bar = { thickness = 0 }", "less than 1"),
+            ("bar = { thickness = \"wide\" }", "thickness"),
+            ("bar = { length = 0.5 }", "neither 0"),
+            ("bar = { gap = -1 }", "gap -1 is negative"),
+            ("bar = { radius = -2 }", "radius -2 is negative"),
+            (
+                "bar = { radius = { bottom_left = -4 } }",
+                "radius -4 is negative",
+            ),
+            ("bar = { radius = { 1, 2, 3, 4 } }", "a table of them"),
+            ("bar = { radius = { top = 2 } }", "no corner `top`"),
+            (
+                "bar = { inverse_radius = -3 }",
+                "inverse_radius -3 is negative",
+            ),
+            ("border = -1", "border -1 is negative"),
+            ("animation = { max_fps = -30 }", "max_fps -30 is negative"),
+            ("hud = { show = 1 }", "hud.show"),
+            (
+                "animation = { popout = { stiffness = 0 } }",
+                "animation.popout.stiffness: stiffness 0 is less than 1",
+            ),
+            ("animation = { drag = { damping = 0 } }", "less than 0.05"),
+            (
+                "animation = { detaching = { pull = 1 } }",
+                "outside 0 to 0.9",
+            ),
+            (
+                "animation = { detaching = { distance = 5 } }",
+                "less than 20",
+            ),
+            ("animation = { wobble = { amount = -1 } }", "amount -1"),
+            ("animation = { fold = { speed = 3 } }", "speed"),
+            ("panel = { gap = 4 }", "gap"),
         ] {
-            let err = parse(text).unwrap_err();
+            let err = settings(&format!("return {{ {text} }}")).unwrap_err();
             assert!(err.contains(says), "{text}: {err}");
         }
     }
 
     #[test]
     fn errors_name_the_file() {
-        let err = read(Path::new("/nonexistent/tonish.toml")).unwrap_err();
-        assert!(err.starts_with("/nonexistent/tonish.toml: "), "{err}");
+        let err = read(Path::new("/nonexistent/tonish.luau")).unwrap_err();
+        assert!(err.starts_with("/nonexistent/tonish.luau: "), "{err}");
+        let err = evaluate("return 5", "@/x/config.luau", &stand_in()).unwrap_err();
+        assert!(err.starts_with("/x/config.luau: "), "{err}");
     }
 
     #[test]
     fn install_writes_the_shipped_file_and_never_overwrites_one() {
         let dir = std::env::temp_dir().join(format!("tonish-install-{}", std::process::id()));
-        let path = dir.join("tonish").join("config.toml");
+        let path = dir.join("tonish").join("config.luau");
         install(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT);
 
-        fs::write(&path, "thickness = 30").unwrap();
+        fs::write(&path, "return {}").unwrap();
         let again = install(&path).unwrap_err().kind();
         let kept = fs::read_to_string(&path).unwrap();
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(again, std::io::ErrorKind::AlreadyExists);
-        assert_eq!(kept, "thickness = 30");
+        assert_eq!(kept, "return {}");
+    }
+
+    #[test]
+    fn the_types_are_written_when_they_differ() {
+        let dir = std::env::temp_dir().join(format!("tonish-types-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tonish.d.luau");
+        let first = write_types(&dir).unwrap();
+        let unchanged = write_types(&dir).unwrap();
+        fs::write(&path, "-- an older tonish's types").unwrap();
+        let older = write_types(&dir).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!((first, unchanged, older), (true, false, true));
+        assert_eq!(text, TYPES);
     }
 }

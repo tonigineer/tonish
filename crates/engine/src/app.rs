@@ -1,6 +1,7 @@
 use renderer::Scene;
 use smithay_client_toolkit::shell::wlr_layer::Anchor;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// The wl_output's global name, so that a shell can key per-monitor state on
 /// it for as long as the monitor stays connected. A monitor plugged in again
@@ -16,7 +17,7 @@ pub struct SurfaceId(pub usize);
 
 /// Taken when the monitor appears and not updated yet, so a later change of
 /// mode or scale leaves it stale until tonish restarts.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Output {
     pub id: OutputId,
     /// `None` on compositors without wl_output version 4, so a shell needs a
@@ -42,7 +43,7 @@ pub enum Layer {
 
 /// Mirrors the wlr-layer-shell requests one to one, so that the protocol's
 /// documentation applies field by field.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceSpec {
     /// Becomes the layer surface's namespace, behind a prefix the engine
     /// adds. Compositors match namespaces in rules such as sway's
@@ -57,6 +58,102 @@ pub struct SurfaceSpec {
     pub exclusive: i32,
     /// In the protocol's order: top, right, bottom, left.
     pub margin: (i32, i32, i32, i32),
+    /// `false` lets every click through to whatever is under the surface,
+    /// as for figures shown over windows.
+    pub input: bool,
+}
+
+/// One of the app's surfaces, for the events that happen on it and for
+/// [`Redraw`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum On {
+    Surface(OutputId, SurfaceId),
+    Popup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Left,
+    Right,
+    Middle,
+    /// The evdev code, as wl_pointer sends it.
+    Other(u32),
+}
+
+/// The cursor over a spot of a surface, from cursor-shape-v1's names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Default,
+    /// Over something that does something when clicked.
+    Pointer,
+    /// Over something that can be dragged.
+    Grab,
+    /// While something is dragged.
+    Grabbing,
+}
+
+/// Keys arrive as evdev codes, without a keyboard layout, so that the engine
+/// needs no xkbcommon. That covers the keys that are in the same place on
+/// every layout, and only those are named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Escape,
+}
+
+/// A layer surface of its own over the monitor rather than an xdg_popup,
+/// which the compositor unmaps the moment a click lands outside it, so that
+/// it can animate as it closes. The engine gives it an invisible xdg_popup
+/// for the compositor's grab. The app places it, so it ends up exactly where
+/// it was asked to be, even off the monitor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopupSpec {
+    /// The surface whose button press opened it, which the grab hangs from.
+    pub parent: (OutputId, SurfaceId),
+    /// Logical pixels on the monitor, from its top left corner, regardless of
+    /// the room other surfaces keep.
+    pub at: (i32, i32),
+    /// Logical pixels: room for everything it shows while it moves, so that
+    /// it is never resized during an animation, which would make it flicker.
+    pub size: (u32, u32),
+    /// While `true`, it holds the grab: it gets the keyboard, and a click
+    /// outside every surface of the app reaches [`App::popup_dismissed`]
+    /// instead of the window under it. The grab starts once the popup shows
+    /// with the keyboard, a frame or so later, naming the last button press,
+    /// so turn it on in the batch of a press: compositors accept a grab only
+    /// shortly after one.
+    pub grab: bool,
+    /// The part that takes the pointer, as x, y, width and height in logical
+    /// pixels on the popup. Clicks elsewhere go to whatever is under it.
+    /// While it holds the grab, the part as it is when the grab starts takes
+    /// the pointer through the grab's own surface: Hyprland lets only that
+    /// surface have the pointer during a grab, not the popup's.
+    pub input: Option<(i32, i32, i32, i32)>,
+    /// Where the surface it opens from is, in logical pixels on the popup,
+    /// for the grab's surface, which hangs from it.
+    pub parent_at: (i32, i32),
+}
+
+/// Where something is from what it opens out of: a panel below a bar along
+/// the top, to the right of one down the left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Above,
+    Below,
+    Left,
+    Right,
+}
+
+/// How a frame of a surface went, for an app that shows such figures.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drawn {
+    /// Building the scene and drawing it, up to handing it to the
+    /// compositor.
+    pub took: Duration,
+    /// How long it waited for the GPU's thread, busy with other frames.
+    pub waited: Duration,
+    /// Drawn by the GPU's shader, rather than by the CPU rasteriser.
+    pub gpu: bool,
 }
 
 /// Lends the engine's one scene, cleared before every draw, so that its
@@ -70,6 +167,10 @@ pub struct Paint<'a> {
     /// `f32`, although outputs only report whole scales so far, so that
     /// fractional scaling can come without changing every shell.
     pub scale: f32,
+    /// When the engine started drawing the frame, which animations step
+    /// their springs to. Passed in rather than read by the app, so that a
+    /// shell's animations can be tested at any time.
+    pub time: Instant,
 }
 
 /// Keeps the shell free of Wayland: it only says which surfaces it wants
@@ -102,12 +203,13 @@ pub trait App {
         Vec::new()
     }
 
-    /// `true` makes the engine destroy every surface and ask
-    /// [`App::surfaces`] again. Rebuilding is the one way to apply any
-    /// change, since a layer surface's namespace can never change and its
-    /// layer only with a newer protocol version than the engine uses. A save
-    /// that changes nothing should return `false`, because a rebuild makes
-    /// the panels blink.
+    /// `true` makes the engine ask [`App::surfaces`] again. A surface that
+    /// keeps its name and layer is changed in place and drawn again at the
+    /// size the compositor gives it, without a blink. Any other is replaced,
+    /// because a layer surface's namespace can never change and its layer
+    /// only with a newer protocol version than the engine uses, and a
+    /// replaced surface blinks. A change that leaves every surface's spec as
+    /// it was still needs [`App::to_redraw`] to show.
     fn changed(&mut self, _path: &Path) -> bool {
         false
     }
@@ -118,6 +220,83 @@ pub trait App {
     fn socket(&self) -> Option<PathBuf> {
         None
     }
+
+    /// A pointer button pressed on one of the app's surfaces, at `at` in
+    /// logical pixels on it.
+    fn pressed(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
+
+    /// The button pressed on `on` was let go, at `at` on that surface, which
+    /// may lie outside it after a drag.
+    fn released(&mut self, _on: On, _at: (f32, f32), _button: Button) {}
+
+    /// The pointer moved over `on`, or anywhere while a button pressed on it
+    /// is held, to `at` on that surface.
+    fn moved(&mut self, _on: On, _at: (f32, f32)) {}
+
+    /// The pointer left `on`, so that what lit up under it can go dark: no
+    /// motion over it follows until the pointer comes back.
+    fn left(&mut self, _on: On) {}
+
+    /// Asked whenever the pointer enters a surface or moves over it or
+    /// while dragging from it.
+    fn cursor(&self, _on: On, _at: (f32, f32)) -> Cursor {
+        Cursor::Default
+    }
+
+    /// Only a popup that holds the grab gets the keyboard, so keys arrive
+    /// only then.
+    fn key(&mut self, _key: Key) {}
+
+    /// Asked after every batch of events, like [`App::to_redraw`]. A popup
+    /// opens when the answer changes to `Some`, changes with it, and closes
+    /// when it is `None`. A click on another of the app's surfaces while it
+    /// holds the grab arrives as [`App::pressed`].
+    fn popup(&self) -> Option<PopupSpec> {
+        None
+    }
+
+    /// A click outside every surface of the app ended the popup's grab. The
+    /// popup stays until [`App::popup`] answers `None`, so that it can
+    /// animate away.
+    fn popup_dismissed(&mut self) {}
+
+    /// The engine closed the popup, as when its monitor went away. It does
+    /// not open again until [`App::popup`] answers something else.
+    fn popup_closed(&mut self) {}
+
+    /// Asked after every draw of a surface: whether it moves, so that the
+    /// engine draws it again when the compositor is ready for its next
+    /// frame. A surface the compositor doesn't show gets no frames, so its
+    /// animation waits until it is shown again.
+    fn animating(&self, _on: On) -> bool {
+        false
+    }
+
+    /// The most frames a second the surface is drawn while it animates.
+    /// `None` takes every frame the compositor offers, at the monitor's
+    /// refresh rate.
+    fn max_fps(&self, _on: On) -> Option<f32> {
+        None
+    }
+
+    /// Asked after every batch of events, like [`App::to_redraw`]: `true`
+    /// makes the engine ask [`App::surfaces`] again for every monitor, as
+    /// after [`App::changed`], so that a surface can come or go on a
+    /// message. Unlike a change of the settings, it leaves an open popup
+    /// open, unless the surface it hangs from is replaced.
+    fn to_reshape(&mut self) -> bool {
+        false
+    }
+
+    /// A frame was drawn. A frame for the GPU is reported once the GPU's
+    /// thread has drawn it, in a later batch of events.
+    fn drew(&mut self, _on: On, _drawn: Drawn) {}
+
+    /// The GPU has taken over drawing, on this device as OpenGL names it.
+    fn gpu_started(&mut self, _device: &str) {}
+
+    /// [`App::draw`] for the popup.
+    fn draw_popup(&mut self, _paint: &mut Paint) {}
 
     /// One line from a client, already trimmed. The engine owns the socket
     /// and the app the meaning of the messages, so that the protocol can grow
@@ -140,7 +319,7 @@ pub enum Redraw {
     /// Surfaces that are gone by the time the engine asks, or that the
     /// compositor has not configured yet, are skipped; a configure draws them
     /// anyway.
-    Surfaces(Vec<(OutputId, SurfaceId)>),
+    Surfaces(Vec<On>),
 }
 
 /// `quit` is part of the reply rather than a call the app makes, because the

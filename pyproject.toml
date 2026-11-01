@@ -22,9 +22,14 @@ extend-select = ["B", "I", "PT", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/desktop"]
-# A misspelt marker is an error, instead of a mark that selects nothing.
-addopts = ["--strict-markers"]
-# CI runs only the general tests, with -m "not local". How exactly panels look
-# is checked locally, so that changing a panel does not need a round trip
-# through CI.
-markers = ["local: how panels look, down to the pixel; CI leaves these out"]
+# A misspelt marker is an error, instead of a mark that selects nothing. The
+# timing tests need a GPU and take half a minute, idling for the cold draws,
+# so they run only when asked for with -m hardware.
+addopts = ["--strict-markers", "-m", "not hardware"]
+# CI runs only the general tests, with -m "not local and not hardware". How
+# exactly panels look is checked locally, so that changing a panel does not
+# need a round trip through CI.
+markers = [
+    "local: how panels look, down to the pixel; CI leaves these out",
+    "hardware: how long drawing takes on this machine's GPU; run with -m hardware",
+]

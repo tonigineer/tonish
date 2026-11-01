@@ -9,7 +9,7 @@ A shape in tonish isn't a set of pixels or a path. It's a function that gives th
 
 The GPU's fragment shader works with the same number, so the CPU and the GPU draw the same scenes, see [The GPU](#the-gpu).
 
-Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
+The shapes so far are `Rect`, `RoundedRect`, with a radius of its own at each corner, and `Circle`; `Fillet`, a concave corner, which laid between two shapes of the same colour joins them in a curve; `Liquid`, a rounded box melted into an edge, straight or with waves on it, as the settings panel into the bar; `Text`, a line of text; and `Outline`, which draws any shape as a band around its edge. Every shape implements the `Shape` trait in `crates/renderer/src/shapes/`, one file per shape:
 
 | Method | What it gives |
 |---|---|
@@ -38,7 +38,19 @@ The solid and empty stretches must not change a single byte of the result. [The 
 
 `gpu::Gpu` in the renderer draws a scene with OpenGL ES 3.0, in one draw call. Every shape becomes an instance of a quad over its box. The fragment shader, `gpu/shape.frag`, computes the distance at each pixel's centre and turns it into coverage exactly as the CPU rasteriser does.
 
-A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with rounded corners, which is also a circle, folded into an outline or not. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
+A shader can't call `distance`, so every shape describes itself with `sdf`, in the one form the shader knows: a box with a radius at each corner, which with every radius at half its size is a circle, melted into an edge or not, which is how a `Liquid` gets its shape, with a circle cut out of it or not, which is how a `Fillet` gets its curve, and folded into an outline or not.
+
+A `Liquid` joins its box and its edge with hg_sdf's round union, `max(r, min(a, b)) − |max((r − a, r − b), 0)|`, rather than a smooth minimum. Where the two meet at a right angle, as a panel's side meets the bar, it is the exact distance to concave corners of radius `r`, so the shape shrunk by a border's width, with `r` grown by it, is the inside of that border, and a border keeps its width round the corners. A smooth minimum would thicken it there by up to √2. The bar's side of the edge is a half-plane, cut off square at the ends of its `extent`, where the bar's straight edge ends, and the whole `Liquid` is clipped to its bounds. A corner that curved into edge past an end would be cut into a spike, so the shell narrows a card's corners to the room its sides have, and the neck blends no wider than its distance to the nearer end.
+
+A `Liquid` can also have a `Neck`, the gooey join of a card pulled off the bar: a curve from the bar's edge to the card, square to the edge at both its ends, as liquid pulled out of a surface stands, and bent in between as a smoothstep where its ends lie apart along the edge. Its half-width runs from `end` at each end to `waist` in the middle along a catenary, `waist · cosh(u · acosh(end / waist))`, the shape of a soap film between two rings, less its `cut`, which parts a neck into two horns once it has collapsed. It melts in after the round union, with pleama's quadratic smooth minimum, so that the card's corners at the bar keep their radius however gooey the neck is. Its distance is the distance across the curve at the point's height over the edge, divided by the length of the curve's normal as for a wave, so it is close rather than exact: a border on it is a little thinner where it narrows fastest. A `Bulge` is a bell rising out of the edge, as the bar's edge after that card. Waves and a bulge flatten to nothing within 24 pixels of the edge's ends.
+
+The shell draws the cards that hang from the bar with these shapes, in `crates/tonish/src/liquid/`: `draw` turns a card's `Pose` into one `Liquid` with the bar while a neck joins them, and into a `RoundedRect` of its own once the card is free. The neck's waist is the larger root of `a·cosh(H/a) = R` for the stretch so far, so it narrows hardly at all until the film is as long as one can be, still 0.55 of its ends wide, and then collapses: the cut grows from the waist to the ends' width over a tenth of a second.
+
+The edge can carry a `Wave`: groups of crests that run apart from a point, as on water after a drop falls in, with the crests running at twice the speed of their group, so that each rises at the back of its group and fades at its front. Its distance is the height over the edge divided by the length of the slope's normal, exact on a straight edge and close enough near a crest for antialiasing and a border. Crests only rise out of the edge, never into it, because the panel is drawn over the bar and can't take from it. The shader reduces the crests' phase to one wavelength before its sine and cosine, as `Wave` does, because NVIDIA's lose precision far from 0.
+
+## Text
+
+`Font` in `crates/renderer/src/text.rs` sets a line of text with fontdue: each character is its font's glyph, at its advance, without shaping, which is right for the figures and labels a panel shows. It rasterises each glyph once per size, on whole physical pixels, and makes a `Text` of the coverage. A `Text`'s `distance` is not a distance: it is the value that makes the rasteriser's coverage of each pixel the glyph's own, `(0.5 − coverage) / scale`, so the CPU draws text exactly as the font made it, without a second way of drawing. The shader has no glyphs, so a frame with text goes to the CPU even on the GPU. That suits a small surface such as the figures in the corner, not a large one that animates, which will need glyphs on the GPU. `Sdf::distance` is the shader's function written again in Rust, so that the tests can check every shape's `sdf` against its `distance` without a GPU. The two have to change together.
 
 A scene with a shape that has no `sdf`, such as an outline of an outline, is drawn by the CPU rasteriser, and the GPU shows the result as a texture. The surface stays with EGL even then: a compositor with explicit sync, such as Hyprland with NVIDIA's driver, ends the connection when a surface that EGL has drawn into gets a shared-memory buffer.
 
@@ -52,7 +64,7 @@ Everything EGL and OpenGL do happens on a thread of its own, `gles::Thread`, whi
 
 Until the thread reports that it has started, the engine draws every surface on the CPU. Then it draws every surface once more, which moves it to the GPU. From then on, the engine builds each frame's scene and sends it to the thread, which is why shapes are `Send`. The thread draws only the latest frame of each surface, so it never falls behind, and draws a scene with a shape the shader doesn't know on the CPU itself.
 
-The thread makes a surface's EGL window at its first frame, and draws that frame twice ahead. EGL allocates a window's buffers only as frames need them, and with NVIDIA's driver each allocation stalls a swap for 0.2 to 2 ms. Drawing ahead gets that done while the surface moves, rather than in the first frames of an animation. An EGL window has to be destroyed before its surface: the engine holds a `gles::Window` for each, and dropping one destroys the window on the thread and waits for that.
+The thread makes a surface's EGL window at its first frame, and right after that frame, draws it twice more. EGL allocates a window's buffers only as frames need them, and with NVIDIA's driver each allocation stalls a swap for 0.2 to 2 ms. The extra frames get that done while the surface shows the same image, rather than in the first frames of an animation, and coming after the first frame, they don't hold it up. An EGL window has to be destroyed before its surface: the engine holds a `gles::Window` for each, and dropping one destroys the window on the thread and waits for that.
 
 If EGL or OpenGL fails, or the thread panics, every window is gone before the thread reports it. The engine then logs a warning, replaces the surfaces that were on the GPU with new ones, and draws everything on the CPU from then on.
 
@@ -95,6 +107,18 @@ Measured on an Intel Core i9-13900K, with the renderer built for that CPU, as `.
 
 About 13 µs of every GPU time is a fixed cost, the same for any small surface, for handing the frame over and waiting for it.
 
+### On the GPU, in a compositor
+
+The benchmarks above stop before a frame is shown. `just bench-desktop` times the whole draw, as tonish's log reports it, from building the scene to swapping it: it starts tonish in a headless sway that composites on this machine's GPU, with two 3840×2160 monitors at scale 2, and prints the median and the slowest `took` of three cases:
+
+- **warm redraws**, `tonish msg redraw` a tenth of a second apart, as in an animation;
+- **resizes**, the bar's thickness changed back and forth in its settings, for which EGL allocates the surface's buffers again;
+- **cold redraws**, each after ten seconds without one. With NVIDIA's driver, the first draw after that has taken 1 to 2 ms instead of 0.1, unless something else, such as a game, keeps the GPU busy.
+
+`tonish --draw-always` draws every panel again as soon as it has drawn it, without waiting for the compositor's next frame, so that the figures in the corner show the most frames a second tonish reaches, and each draw's time, in your own session. On an NVIDIA RTX 4090, in a headless sway with two monitors at scale 2 and the engine logging at debug level, a bar 3840 by 88 pixels reached about 3,000 frames a second on each monitor on the GPU, and about 3,350 on the CPU, which then kept 82 % of a core busy. The frame itself takes 0.12 to 0.15 ms either way; the rest is handing the frame to the compositor.
+
+A redraw counts with the slower of its two monitors' draws, and `waited` is the longest that a draw waited for the GPU's thread, busy with the other monitor. Arguments change how many of each it measures and how long it idles, such as `just bench-desktop --cold 5 --idle 20`. It needs sway and a GPU that sway can composite on, and passes sway `--unsupported-gpu` for NVIDIA's driver. The [timing tests](testing.md#desktop-tests) hold the same cases to a budget.
+
 ### In your session
 
 With `TONISH_LOG=engine=debug`, tonish logs each draw in your own session, with its size, the time it took, and `on=cpu` or `on=gpu`. Here tonish starts, gets `tonish msg redraw`, and ends with Ctrl+C:
@@ -112,4 +136,4 @@ With `TONISH_LOG=engine=debug`, tonish logs each draw in your own session, with 
    1.802231057s  INFO engine::wayland: shutting down signal=SIGINT
 ```
 
-`tonish msg redraw` draws every panel again, so you can time a draw whenever you like, and `--disable-gpu` keeps the panels on the CPU to compare. For a GPU draw, `took` is the time spent on the frame, building its scene on the engine's thread and drawing and swapping it on the GPU's thread, and `waited` is how long it waited in between for the GPU's thread, busy with other frames. Neither is the GPU's own work, which only the benchmarks measure. `moved to the GPU` is the time it took to make the surface's EGL window and draw its first frame twice ahead. Starting the GPU is no part of any draw: the `GPU started` line has a time of its own.
+`tonish msg redraw` draws every panel again, so you can time a draw whenever you like, and `--disable-gpu` keeps the panels on the CPU to compare. For a GPU draw, `took` is the time spent on the frame, building its scene on the engine's thread and drawing and swapping it on the GPU's thread, and `waited` is how long it waited in between for the GPU's thread, busy with other frames. Neither is the GPU's own work, which only the benchmarks measure. `moved to the GPU` is the time it took to make the surface's EGL window, before its first frame. Starting the GPU is no part of any draw: the `GPU started` line has a time of its own.

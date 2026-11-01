@@ -21,7 +21,7 @@ Every pull request into `main` has to raise the version. The exception is a bran
 Each push to `main` runs the release workflow:
 
 1. **Version:** if `v` plus the version from `Cargo.toml` is already a tag, there's nothing to do.
-2. **Build:** the tests, the release build for x86-64-v2, and the package. The package holds the binary and the default settings as `config.toml`, and comes with a SHA-256 file.
+2. **Build:** the tests, the release build for x86-64-v2, and the package. The package holds the binary and the default settings as `config.luau`, and comes with a SHA-256 file.
 3. **Publish:** a GitHub release with that tag, generated notes, the package and its checksum.
 
 ## The book

@@ -41,10 +41,13 @@ def test_the_panels_appear_before_the_gpu_has_started(desktop):
 
 def test_the_gpu_draws_the_panels_as_the_cpu_does(desktops):
     cpu = desktops("--disable-gpu")
+    drawn(cpu)
+    cpu.hide_hud()
     want = drawn(cpu)
     cpu.close()
     gpu = desktops()
     gpu.wait_for_gpu()
+    gpu.hide_hud()
     got = drawn(gpu)
     assert len(got) == len(want), "the screenshots differ in size"
     # Rounding in the blending, which the renderer's own test bounds by 2
@@ -56,7 +59,9 @@ def test_the_gpu_draws_the_panels_as_the_cpu_does(desktops):
 def test_new_panels_go_to_the_gpu_after_a_settings_change(desktop):
     desktop.wait_for_gpu()
     before = desktop.logged().count("on=gpu")
-    desktop.settings.write_text('orientation = "vertical"\nthickness = 30\n')
+    desktop.settings.write_text(
+        "return { bar = { orientation = Orientation.Vertical, thickness = 30 } }\n"
+    )
     left = [(30, 0, 1920 - 30, 1080)] * 2
     assert wait_for(lambda: desktop.workspaces() == left), desktop.workspaces()
     assert wait_for(lambda: desktop.logged().count("on=gpu") >= before + 2), (

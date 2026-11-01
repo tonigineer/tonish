@@ -38,8 +38,8 @@ impl Shape for Circle {
         Some(Sdf {
             center: self.center,
             half: Point::new(self.r, self.r),
-            radius: self.r,
-            outline: 0.0,
+            radii: [self.r; 4],
+            ..Sdf::default()
         })
     }
 }

@@ -22,9 +22,17 @@ def test_the_log_names_every_monitor(desktop):
 
 def test_tonish_writes_its_settings_on_first_start(desktop):
     written = desktop.settings
-    shipped = (ROOT / "assets" / "default-config.toml").read_text()
+    shipped = (ROOT / "assets" / "default-config.luau").read_text()
     assert wait_for(lambda: written.exists() and written.read_text() == shipped), (
-        f"{written} is missing or differs from assets/default-config.toml"
+        f"{written} is missing or differs from assets/default-config.luau"
+    )
+
+
+def test_tonish_writes_the_settings_types_beside_them(desktop):
+    written = desktop.settings.parent / "tonish.d.luau"
+    shipped = (ROOT / "assets" / "tonish.d.luau").read_text()
+    assert wait_for(lambda: written.exists() and written.read_text() == shipped), (
+        f"{written} is missing or differs from assets/tonish.d.luau"
     )
 
 

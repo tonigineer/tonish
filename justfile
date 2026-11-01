@@ -64,7 +64,7 @@ test:
 [group("check")]
 check: lint test
 
-[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim, Mesa and uv.")]
+[doc("Run the desktop tests: tonish on a headless sway. ARGS go to pytest, such as -k redraw or --lf. Needs sway, grim, Mesa and uv, and a monospace font for the test of the figures' text.")]
 [group("check")]
 [positional-arguments]
 desktop *args:
@@ -81,6 +81,13 @@ check-all: check desktop
 [group("bench")]
 bench filter="":
     cargo bench -p renderer --bench draw -- {{ filter }}
+
+[doc("Time drawing on this machine's GPU, warm, cold and resized, in a headless sway. ARGS go to the script, such as --idle 5. Needs sway, a GPU and uv.")]
+[group("bench")]
+[positional-arguments]
+bench-desktop *args:
+    cargo build --release -p tonish
+    uv run python tests/desktop/bench.py "$@"
 
 [doc("Benchmark and keep the results as baseline NAME, to measure a change against.")]
 [group("bench")]

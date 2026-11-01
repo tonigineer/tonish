@@ -1,0 +1,25 @@
+// Zed's settings for this repository.
+{
+  "lsp": {
+    "luau-lsp": {
+      "settings": {
+        // The settings' types, from the repository rather than the copy tonish
+        // writes beside the user's settings, so that they match the code here.
+        // The Luau extension passes the path to luau-lsp, which Zed starts in
+        // the repository's root.
+        "definitions": ["assets/tonish.d.luau"],
+        "roblox": {
+          "enabled": false
+        },
+        "fflags": {
+          "sync": false
+        },
+        "luau-lsp": {
+          "platform": {
+            "type": "standard"
+          }
+        }
+      }
+    }
+  }
+}

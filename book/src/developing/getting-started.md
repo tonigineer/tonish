@@ -5,9 +5,11 @@
 | Tool | For |
 |---|---|
 | Rust, current stable | everything; the workspace uses edition 2024 |
+| A C++ compiler | Luau, which runs the settings and builds from source with tonish |
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
 | sway, grim, Mesa | `just desktop`, the [tests on a headless sway](testing.md#desktop-tests). |
+| A monospace font | The desktop test of the text in the figures in the corner, which is skipped without one. |
 | [uv](https://docs.astral.sh/uv/) | The Python tools: pytest for `just desktop`, ruff for `just fmt` and `just lint`. uv installs them at the versions in `uv.lock`. |
 | [mdBook](https://rust-lang.github.io/mdBook/) 0.5 | `just book`, this book |
 
@@ -28,6 +30,7 @@
 | `just desktop [args]` | Runs the [desktop tests](testing.md#desktop-tests). Arguments go to pytest, such as `-k redraw` or `--lf`. |
 | `just check-all` | `just check`, then the desktop tests: everything a pull request checks in code. |
 | `just bench [filter]`, `just bench-save`, `just bench-compare` | [Benchmark](drawing.md#measuring) the renderer, and compare against a saved baseline. |
+| `just bench-desktop [args]` | [Time drawing](drawing.md#on-the-gpu-in-a-compositor) on this machine's GPU in a headless sway: warm and cold redraws, and resizes. |
 | `just doc` | Builds the [API documentation](api.md), private items included, with warnings as errors. |
 | `just book` | Builds this book, with the API documentation inside it, into `book/build`. |
 | `just book-serve` | Serves this book at `http://localhost:3000` and rebuilds it as you edit. The API documentation isn't part of it there. |
@@ -40,9 +43,11 @@
 | `crates/renderer` | Shapes, scenes, the CPU rasteriser, the OpenGL ES backend with its shaders in `gpu/`, PNG snapshots, and the benchmarks in `benches/`. It knows nothing of Wayland. |
 | `crates/engine` | The Wayland side: the `App` trait, monitors, layer surfaces, the event loop, the socket, file watching, and EGL with the GPU's thread in `gles.rs`. |
 | `crates/tonish` | The shell: panels, settings, the command line, messages, logging. |
-| `assets/default-config.toml` | The default settings, compiled into tonish and written on its first start. |
+| `assets/default-config.luau` | The default settings, compiled into tonish and written on its first start. |
+| `assets/tonish.d.luau` | The settings' types for luau-lsp, compiled into tonish and written beside the settings. |
 | `tests/desktop/` | The desktop tests, for pytest. |
 | `pyproject.toml`, `uv.lock` | The Python tools for the desktop tests, their versions and their settings. |
 | `book/` | This book. |
 | `.github/workflows/` | CI for pull requests, releases, and the book's site. |
 | `.cargo/config.toml` | Builds for the CPU you build on, which suits benchmarks. Releases override it. |
+| `.zed/settings.json` | Zed's settings for this repository: luau-lsp with the settings' types, so that Zed completes and checks `assets/default-config.luau`. |

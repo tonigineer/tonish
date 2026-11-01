@@ -9,14 +9,19 @@ fn main() -> ExitCode {
     let done = match &args.command {
         Some(Command::Msg { message }) => ipc::socket_from_env()
             .ok_or_else(|| "XDG_RUNTIME_DIR is not set, so there is no socket to send to".into())
-            .and_then(|socket| ipc::send(&socket, *message)),
+            .and_then(|socket| ipc::send(&socket, *message))
+            .map(|answer| {
+                if let Some(answer) = answer {
+                    println!("{answer}");
+                }
+            }),
         // Only the running shell logs. `msg` is a short command whose errors
         // print plainly, as clap's do.
         None => {
             logging::init();
             info!(version = %env!("CARGO_PKG_VERSION"), "starting");
-            let gpu = args.gpu();
-            load(args).and_then(|shell| engine::run(Box::new(shell), gpu))
+            let options = args.options();
+            load(args).and_then(|shell| engine::run(Box::new(shell), options))
         }
     };
     match done {

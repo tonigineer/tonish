@@ -110,9 +110,11 @@ jobs:
       options: --shm-size=1g
     steps:
       # Mesa by name, because its software renderer stands in for the GPU
-      # in the GPU tests, and sway only asks for some OpenGL driver.
-      - name: Install sway, grim, Mesa, Python and uv
-        run: pacman -Syu --noconfirm --needed sway grim mesa python uv > /dev/null
+      # in the GPU tests, and sway only asks for some OpenGL driver. A font,
+      # because sway brings fontconfig but none, and the figures in the
+      # corner show text only with one, which a test checks.
+      - name: Install sway, grim, Mesa, a font, Python and uv
+        run: pacman -Syu --noconfirm --needed sway grim mesa ttf-dejavu python uv > /dev/null
 
       # sway carries cap_sys_nice; a container may not run a binary with a
       # capability.
@@ -135,7 +137,7 @@ jobs:
           tar xzf dist/tonish-*.tar.gz --strip-components=1 -C target/release
 
       - name: Run the desktop tests
-        run: uv run pytest -m "not local"
+        run: uv run pytest -m "not local and not hardware"
 
       - name: Keep the screenshots of failures
         if: failure()

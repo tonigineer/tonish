@@ -6,6 +6,8 @@ pub mod gpu;
 pub mod scene;
 pub mod shapes;
 pub mod snapshot;
+pub mod text;
 
 pub use scene::{Point, Rgba, Scene};
-pub use shapes::{Circle, Rect, Shape};
+pub use shapes::{Circle, Fillet, Liquid, Rect, RoundedRect, Shape, Text};
+pub use text::Font;

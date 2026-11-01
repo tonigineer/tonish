@@ -1,0 +1,81 @@
+-- Types of tonish's settings, for luau-lsp, which then completes the
+-- settings and their values in config.luau and marks a misspelt one.
+--
+-- tonish writes this file beside config.luau on every start, so that it
+-- always matches the tonish that runs; changes to it don't last. Load it in
+-- luau-lsp's "definitions" setting, or on its command line:
+--
+--     luau-lsp analyze --definitions @tonish=tonish.d.luau config.luau
+
+export type Orientation = "horizontal" | "vertical"
+
+export type Radius = number | {
+    top_left: number?,
+    top_right: number?,
+    bottom_right: number?,
+    bottom_left: number?,
+}
+
+export type Motion = {
+    stiffness: number?,
+    damping: number?,
+}
+
+export type Settings = {
+    border: number?,
+    bar: {
+        orientation: Orientation?,
+        thickness: number?,
+        length: number?,
+        gap: number?,
+        radius: Radius?,
+        inverse_radius: number?,
+    }?,
+    panel: {
+        radius: Radius?,
+        inverse_radius: number?,
+    }?,
+    animation: {
+        max_fps: number?,
+        popout: Motion?,
+        fold: Motion?,
+        drag: Motion?,
+        detaching: {
+            distance: number?,
+            pull: number?,
+            thickness: number?,
+            kick: number?,
+        }?,
+        attaching: {
+            stiffness: number?,
+            damping: number?,
+            kick: number?,
+        }?,
+        wobble: {
+            amount: number?,
+            stiffness: number?,
+            damping: number?,
+        }?,
+        ripples: {
+            height: number?,
+            duration: number?,
+            stiffness: number?,
+            damping: number?,
+        }?,
+    }?,
+    hud: {
+        show: boolean?,
+    }?,
+}
+
+declare monitor: {
+    name: string?,
+    width: number,
+    height: number,
+    scale: number,
+}
+
+declare Orientation: {
+    Horizontal: Orientation,
+    Vertical: Orientation,
+}

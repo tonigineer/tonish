@@ -15,8 +15,9 @@ The release binary is built for x86-64-v2, which practically every x86-64 CPU st
 tonish loads these libraries when it runs, and every Wayland desktop has them:
 - `libwayland-client`, always;
 - `libEGL` with a GPU driver, and `libwayland-egl`, once tonish starts the [GPU](running.md#the-gpu), which `--disable-gpu` prevents. Without them, tonish draws everything on the CPU.
+- `fc-match`, from fontconfig, and a monospace font, for the text of the [figures in the corner](running.md#the-figures-in-the-corner). Without them, the figures show without text.
 
-The package also holds `config.toml`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
+The package also holds `config.luau`, the default settings. You don't need to copy it: tonish writes the same file on its first start (see [Settings](settings.md)).
 
 ## From source
 
@@ -40,3 +41,13 @@ Start tonish from your compositor's configuration, for example:
 | niri | `spawn-at-startup "tonish"` |
 
 The compositor has to find `tonish` on its own `PATH`, which isn't always the one your shell has. If it doesn't start, give the full path, such as `~/.local/bin/tonish`.
+
+tonish animates its own panels: the settings panel grows out of the bar and folds back into it. Hyprland animates every layer surface as it appears and goes, which plays on top of that, so turn its animation off for tonish's surfaces, whose namespaces all start with `tonish-`. In a Lua configuration:
+
+```lua
+hl.layer_rule({
+    name = "tonish",
+    match = { namespace = "^tonish-.+$" },
+    no_anim = true,
+})
+```

@@ -54,7 +54,7 @@ jobs:
           name="tonish-v$(just version)-x86_64-linux"
           mkdir -p "dist/$name"
           cp target/release/tonish "dist/$name/"
-          cp assets/default-config.toml "dist/$name/config.toml"
+          cp assets/default-config.luau "dist/$name/config.luau"
           cd dist
           tar czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
