@@ -347,7 +347,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "engine"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "calloop",
  "inotify",
@@ -939,7 +939,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "renderer"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "criterion",
  "fontdue",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "tonish"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "engine",
