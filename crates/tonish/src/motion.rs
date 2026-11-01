@@ -51,9 +51,14 @@ impl Spring {
     }
 
     /// Closer than anything a frame shows: 5e-4 of a 300-pixel motion is a
-    /// sixth of a pixel.
+    /// sixth of a pixel. Far from 0 that is finer than an f32 resolves: at
+    /// 637, a step of 1 ms at 0.03 pixels a second rounds back to where it
+    /// was, and a spring there would stop short of its target and never
+    /// count as settled, so the margins grow with the target.
     pub fn settled(&self) -> bool {
-        (self.value - self.target).abs() < 5e-4 && self.velocity.abs() < 5e-3
+        let far = self.target.abs();
+        (self.value - self.target).abs() < 5e-4 + 1e-5 * far
+            && self.velocity.abs() < 5e-3 + 1e-4 * far
     }
 }
 
@@ -68,6 +73,19 @@ mod tests {
                 s.value
             })
             .collect()
+    }
+
+    /// Where a card that came to rest 637 pixels out stuck, drawing for
+    /// good, at 43 frames a second.
+    #[test]
+    fn far_from_0_it_still_settles() {
+        let mut s = Spring::new(637.0017);
+        s.velocity = -0.029_186_5;
+        s.aim(637.0, 420.0, 0.6);
+        for _ in 0..43 {
+            s.step(1.0 / 43.0);
+        }
+        assert!(s.settled(), "{s:?}");
     }
 
     #[test]

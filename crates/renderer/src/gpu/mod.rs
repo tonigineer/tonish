@@ -302,13 +302,15 @@ mod tests {
 
     /// `None` without an EGL that offers Mesa's surfaceless platform. The
     /// tests then pass without checking anything, and the desktop tests,
-    /// which CI runs with Mesa, check the GPU instead.
+    /// which CI runs with Mesa, check the GPU instead. Shaders that don't
+    /// compile are a failure, not a skip, or a broken shader would pass.
     fn target(size: (u32, u32)) -> Option<Target> {
         let headless = Headless::new()?;
         headless.framebuffer(size).ok()?;
         // SAFETY: `Headless::new` made its context current, and the tests
         // that use it run on this thread only, each in a process of its own.
-        let gpu = unsafe { Gpu::new(|name| headless.load(name)) }.ok()?;
+        let gpu = unsafe { Gpu::new(|name| headless.load(name)) }
+            .unwrap_or_else(|e| panic!("the shaders do not compile: {e}"));
         Some(Target {
             headless,
             gpu,
