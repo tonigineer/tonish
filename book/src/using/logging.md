@@ -7,6 +7,7 @@ By default, tonish logs what happens once or rarely:
 - the settings it reads and changes;
 - the monitors it finds;
 - the socket it listens on;
+- the GPU: on which device it draws, and how long it took to start;
 - why it shuts down.
 
 A normal run fits on a screen. The time in front of each line counts seconds since tonish started:
@@ -39,4 +40,4 @@ If tonish can't read `TONISH_LOG`, it logs a warning that names the mistake and 
 | `error` | Something tonish needs failed, and a panel is wrong or missing until it recovers. |
 | `warn` | Something is wrong, such as a broken settings file, and tonish works around it. |
 | `info` | Starting, settings, monitors, the socket, shutting down. |
-| `debug` | Every event: each draw with its size and time, messages and their answers, file changes. |
+| `debug` | Every event: each draw with its size, its time, whether the CPU or the GPU drew it, and for the GPU how long it waited for its turn, each surface that moves to the GPU, messages and their answers, file changes. |

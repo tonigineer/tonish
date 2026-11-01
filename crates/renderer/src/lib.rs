@@ -2,6 +2,7 @@
 //! can be built and tested without a display.
 
 pub mod cpu;
+pub mod gpu;
 pub mod scene;
 pub mod shapes;
 pub mod snapshot;

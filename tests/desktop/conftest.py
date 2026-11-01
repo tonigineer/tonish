@@ -20,6 +20,21 @@ def desktop():
     d.close()
 
 
+@pytest.fixture
+def desktops():
+    """Starts a desktop for each call, with the arguments for tonish, for
+    tests that compare runs."""
+    made = []
+
+    def start(*args):
+        made.append(Desktop(*args))
+        return made[-1]
+
+    yield start
+    for d in made:
+        d.close()
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
     """On a failure, while the desktop still runs: a screenshot for later, and

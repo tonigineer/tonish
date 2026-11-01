@@ -3,6 +3,7 @@
 //! on a valid command line and never handles those cases.
 
 use clap::{Parser, Subcommand};
+use engine::Gpu;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -30,8 +31,22 @@ pub struct Args {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Draw every panel on the CPU, and never start the GPU, which saves memory
+    #[arg(long)]
+    disable_gpu: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+impl Args {
+    pub fn gpu(&self) -> Gpu {
+        if self.disable_gpu {
+            Gpu::Disabled
+        } else {
+            Gpu::Enabled
+        }
+    }
 }
 
 #[derive(Debug, Subcommand, PartialEq)]
@@ -125,6 +140,12 @@ mod tests {
                 "{args:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_gpu_is_used_unless_disabled() {
+        assert_eq!(parse(&[]).unwrap().gpu(), Gpu::Enabled);
+        assert_eq!(parse(&["--disable-gpu"]).unwrap().gpu(), Gpu::Disabled);
     }
 
     #[test]

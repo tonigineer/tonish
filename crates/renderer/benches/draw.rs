@@ -6,12 +6,23 @@
 //! a launcher or an overview would draw. Many small shapes measure the
 //! per-shape overhead that large ones hide. Throughput is reported in pixels
 //! so that cases of different sizes compare directly.
+//!
+//! The `gpu` group draws the same cases with OpenGL ES, into a framebuffer
+//! without a display, and waits for each frame to be finished. The engine's
+//! log cannot show that time: there, a GPU draw ends as soon as the driver
+//! has the commands. Neither group includes showing the frame. The group is
+//! skipped without an EGL that offers Mesa's surfaceless platform.
 
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use glow::HasContext;
 use renderer::cpu;
+use renderer::gpu::Gpu;
 use renderer::{Circle, Point, Rect, Rgba, Scene, Shape};
+
+#[path = "../src/gpu/headless.rs"]
+mod headless;
 
 /// Sized in logical pixels, as the shell lays it out, so that the same scene
 /// can be measured at different output scales.
@@ -20,6 +31,15 @@ struct Case {
     size: (f32, f32),
     scale: f32,
     scene: Scene,
+}
+
+impl Case {
+    fn pixels(&self) -> (usize, usize) {
+        (
+            (self.size.0 * self.scale) as usize,
+            (self.size.1 * self.scale) as usize,
+        )
+    }
 }
 
 fn background(width: f32, height: f32) -> Rect {
@@ -128,11 +148,10 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-fn draw(c: &mut Criterion) {
-    let mut group = c.benchmark_group("draw");
+fn cpu(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cpu");
     for case in cases() {
-        let w = (case.size.0 * case.scale) as usize;
-        let h = (case.size.1 * case.scale) as usize;
+        let (w, h) = case.pixels();
         let mut px = vec![0u8; w * h * 4];
         group.throughput(Throughput::Elements((w * h) as u64));
         group.bench_function(case.name, |b| {
@@ -150,5 +169,35 @@ fn draw(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, draw);
+fn gpu(c: &mut Criterion) {
+    let Some(headless) = headless::Headless::new() else {
+        eprintln!("gpu: skipped, no EGL with Mesa's surfaceless platform");
+        return;
+    };
+    // SAFETY: `Headless::new` made its context current on this thread,
+    // which criterion runs every benchmark on.
+    let mut gpu = unsafe { Gpu::new(|name| headless.load(name)) }.expect("the shaders compile");
+    eprintln!("gpu: on {}", gpu.device());
+    let mut group = c.benchmark_group("gpu");
+    for case in cases() {
+        let (w, h) = case.pixels();
+        headless
+            .framebuffer((w as u32, h as u32))
+            .expect("a framebuffer of the case's size");
+        group.throughput(Throughput::Elements((w * h) as u64));
+        group.bench_function(case.name, |b| {
+            b.iter(|| {
+                gpu.draw(w as u32, h as u32, case.scale, &case.scene.shapes)
+                    .expect("every shape in the cases has an sdf");
+                // Without it, only handing the commands to the driver would
+                // be timed, which ends long before the GPU has drawn.
+                // SAFETY: the context is current.
+                unsafe { headless.gl.finish() };
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, cpu, gpu);
 criterion_main!(benches);

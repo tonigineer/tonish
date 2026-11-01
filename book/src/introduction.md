@@ -7,7 +7,7 @@ It is early. Today there is one panel with a logo on it, and the settings file c
 - a clean shutdown;
 - messages from scripts;
 - logging;
-- a renderer that draws a whole 4K screen in a few milliseconds.
+- a renderer that draws a whole 4K screen in a few milliseconds, and moves to the GPU when that is too slow.
 
 tonish needs a compositor that supports the wlr-layer-shell protocol, such as sway, Hyprland, niri, river or KDE's KWin. GNOME's Mutter does not support it.
 

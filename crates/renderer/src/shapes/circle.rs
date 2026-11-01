@@ -1,4 +1,4 @@
-use super::Shape;
+use super::{Sdf, Shape};
 use crate::scene::{Point, Rgba};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,6 +32,15 @@ impl Shape for Circle {
         }
         let half = (r * r - dy * dy).sqrt();
         Some([self.center.x - half, self.center.x + half])
+    }
+
+    fn sdf(&self) -> Option<Sdf> {
+        Some(Sdf {
+            center: self.center,
+            half: Point::new(self.r, self.r),
+            radius: self.r,
+            outline: 0.0,
+        })
     }
 }
 

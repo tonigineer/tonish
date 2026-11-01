@@ -1,4 +1,4 @@
-use super::Shape;
+use super::{Sdf, Shape};
 use crate::scene::{Point, Rgba};
 
 /// `p0` has to be the top-left corner and `p1` the bottom-right one. They are
@@ -36,6 +36,15 @@ impl Shape for Rect {
         let (x0, x1) = (self.p0.x + depth, self.p1.x - depth);
         let rows = self.p0.y + depth..=self.p1.y - depth;
         (rows.contains(&y) && x0 <= x1).then_some([x0, x1])
+    }
+
+    fn sdf(&self) -> Option<Sdf> {
+        Some(Sdf {
+            center: Point::new((self.p0.x + self.p1.x) / 2.0, (self.p0.y + self.p1.y) / 2.0),
+            half: Point::new((self.p1.x - self.p0.x) / 2.0, (self.p1.y - self.p0.y) / 2.0),
+            radius: 0.0,
+            outline: 0.0,
+        })
     }
 }
 

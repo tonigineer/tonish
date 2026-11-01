@@ -4,10 +4,11 @@
 
 `just test` runs them with cargo-nextest, in release mode, then the doctests. They need no display. The renderer, the settings, the command line, the socket and the messages are all tested in plain processes.
 
-Two kinds of tests deserve a mention:
+Three kinds of tests deserve a mention:
 
-- **Property tests on shapes**, in `shapes/mod.rs`. Every shape belongs in their lists. They check that `bounds` contains the shape, and that `inside` and `hole` agree with `distance`.
+- **Property tests on shapes**, in `shapes/mod.rs`. Every shape belongs in their lists. They check that `bounds` contains the shape, and that `inside`, `hole` and `sdf` agree with `distance`.
 - **The reference test** in `cpu.rs`. It draws 600 random scenes both with `draw` and with the plain per-pixel algorithm, and compares every byte. The scenes come from a fixed xorshift, so a failure repeats on every run.
+- **The GPU tests** in `gpu/mod.rs`. They draw random scenes with OpenGL ES into a framebuffer, without a display, and compare them with the CPU rasteriser. They need an EGL that offers Mesa's surfaceless platform, as Mesa and NVIDIA's driver do. Where there is none, they pass without checking anything, and the desktop tests check the GPU instead.
 
 ## Desktop tests
 
@@ -19,6 +20,7 @@ Two kinds of tests deserve a mention:
 | `test_settings.py` | Editing the settings, and broken edits |
 | `test_shutdown.py` | `tonish msg quit`, and Ctrl+C |
 | `test_drawing.py` | `tonish msg redraw`, and how the bar looks |
+| `test_gpu.py` | The panels appear before the GPU has started, the GPU draws what the CPU draws, and `--disable-gpu` never starts it |
 
 A test asks for the `desktop` fixture from `conftest.py` and gets a sway of its own, which is gone again after the test:
 - a fresh `HOME`, settings folder and runtime folder, so tests can't affect each other or your desktop;
@@ -32,6 +34,8 @@ The fixture is a `Desktop` from `harness.py`, with what tests need to look at to
 - `wait_for_panels()` to wait until tonish is ready for messages and edits.
 
 The module also has `wait_for`, which polls a condition for up to three seconds, and `near`, which compares colours with the tolerance that scaling needs.
+
+A test that compares runs, such as the CPU against the GPU, asks for `desktops` instead: a function that starts one desktop per call, with arguments for tonish, such as `desktops("--disable-gpu")`. The headless sway has no GPU, so Mesa's software renderer stands in for it there.
 
 Tests come in two kinds:
 

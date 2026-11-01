@@ -1,6 +1,6 @@
 [package]
 name = "engine"
-description = "desktop side: layer surfaces, drawing them"
+description = "desktop side: layer surfaces, drawing them on the CPU or the GPU"
 version.workspace = true
 edition.workspace = true
 
@@ -10,9 +10,12 @@ edition.workspace = true
 calloop.workspace = true
 renderer.workspace = true
 inotify.workspace = true
+khronos-egl.workspace = true
 smithay-client-toolkit.workspace = true
 tracing.workspace = true
+wayland-backend.workspace = true
 wayland-client.workspace = true
+wayland-egl.workspace = true
 
 [lints]
 workspace = true

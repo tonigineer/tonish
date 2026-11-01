@@ -8,6 +8,7 @@ tonish --config FILE    # with the settings from FILE
 | Option | What it does |
 |---|---|
 | `-c`, `--config FILE` | Reads the settings from FILE instead, see [Settings](settings.md#another-file). |
+| `--disable-gpu` | Draws every panel on the CPU and never starts the [GPU](#the-gpu), which saves memory. |
 | `msg MESSAGE` | Sends a [message](#messages) to the tonish running in this session. |
 | `-V`, `--version` | Prints the version. |
 | `-h`, `--help` | Prints the help. |
@@ -32,6 +33,18 @@ These all end tonish cleanly: it removes its panels, gives the room back to wind
 - **`kill`**, which sends SIGTERM.
 
 `kill -9` ends tonish without a word. The compositor still removes its panels, and the next start cleans up what was left behind.
+
+## The GPU
+
+tonish draws its first frame on the CPU, so the panels appear at once, a few milliseconds after it starts. Meanwhile it starts the GPU in the background, and once the GPU is ready, a fraction of a second later, every panel moves to it, and tonish draws with OpenGL ES from then on. The GPU draws on a thread of its own, so neither starting it nor drawing ever holds up the rest of tonish.
+
+The GPU costs memory even while it has nothing to do. Measured on an NVIDIA RTX 4090 with the 615 driver, it adds about 100 MB to tonish, which needs about 5 MB without it, and takes about 0.1 s to start. The CPU draws a panel in a fraction of a millisecond, so with panels alone `--disable-gpu` loses nothing but the memory.
+
+| Option | When to use it |
+|---|---|
+| `--disable-gpu` | When the GPU misbehaves, or memory matters more than speed. |
+
+If the GPU can't be used, because there is no libEGL or the driver fails, tonish logs a warning and draws everything on the CPU. The log's `GPU started` line names the device and how long starting took. `llvmpipe` there means Mesa's software renderer, so the CPU does the work in any case, and `--disable-gpu` is the better choice.
 
 ## Messages
 

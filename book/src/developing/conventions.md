@@ -31,8 +31,9 @@ Keep the message a fixed text, and put what varies in fields, as in `info!(monit
 ## Code
 
 - Colour channels are stored as `u8`. Use `u16` or `f32` only for the maths in between.
-- A new shape gets its own file in `crates/renderer/src/shapes/`, and joins both every-shape tests. See [Adding a shape](drawing.md#adding-a-shape).
+- A new shape gets its own file in `crates/renderer/src/shapes/`, and joins the every-shape tests. See [Adding a shape](drawing.md#adding-a-shape).
 - The CPU rasteriser must not change a byte of its output for the sake of speed. See [Drawing](drawing.md).
+- The GPU draws what the CPU rasteriser draws, to within 2 per channel. `signed_distance` in `gpu/shape.frag` and `Sdf::distance` are one function, written twice, and change together. See [The GPU](drawing.md#the-gpu).
 
 ## The book
 

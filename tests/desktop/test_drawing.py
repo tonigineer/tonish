@@ -6,7 +6,8 @@ from harness import near, wait_for
 
 def test_msg_redraw_draws_every_panel_once_more(desktop):
     desktop.wait_for_panels()
-    assert wait_for(lambda: desktop.draws() >= 2), "the panels were never drawn"
+    # The GPU's draws when it takes over must not count as the redraw's.
+    desktop.wait_for_gpu()
     before = desktop.draws()
     sent = desktop.run_tonish("msg", "redraw")
     assert sent.returncode == 0, sent.stderr

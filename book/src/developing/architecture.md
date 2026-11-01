@@ -3,11 +3,11 @@
 Three crates, each depending only on the ones before it:
 
 ```text
-renderer   shapes, scenes, the CPU rasteriser            no Wayland
+renderer   shapes, scenes, drawing on the CPU and the GPU    no Wayland
    ↑
-engine     Wayland, the event loop, the socket, files    no idea what a panel is
+engine     Wayland, EGL, the event loop, the socket, files   no idea what a panel is
    ↑
-tonish     the shell: panels, settings, messages, CLI    no Wayland
+tonish     the shell: panels, settings, messages, CLI        no Wayland
 ```
 
 Only the engine speaks Wayland. That keeps the renderer and the shell testable without a compositor: almost all the tests run in plain processes, and only the [desktop tests](testing.md#desktop-tests) need sway.
@@ -19,7 +19,7 @@ The engine runs an `App`, and the shell is one. The engine asks it questions, an
 | Method | The engine asks |
 |---|---|
 | `surfaces` | Which surfaces does this monitor get? Asked when a monitor appears, and for every monitor again after `changed` returns `true`. |
-| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine rasterises it into the surface's buffer. Asked when the compositor gives the surface a new size, and when `to_redraw` names it. |
+| `draw` | What's on this surface? The app adds shapes to a `Scene`, and the engine draws it on the CPU or the GPU, see [Drawing](drawing.md#the-gpu). Asked when the compositor gives the surface a new size, and when `to_redraw` names it. |
 | `to_redraw` | What should I draw again? Asked after every batch of events, so that anything the app handles can lead to a redraw. A surface named several times in one batch is drawn once. |
 | `watched` | Which files should I watch? Asked once at start. |
 | `changed` | This file changed: does that change your surfaces? `true` makes the engine destroy every surface and ask `surfaces` again. |

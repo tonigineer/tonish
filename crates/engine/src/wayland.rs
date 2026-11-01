@@ -3,6 +3,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use calloop::channel::{self, Event};
 use calloop::signals::{Signal, Signals};
 use inotify::{Inotify, WatchDescriptor, WatchMask};
 use renderer::Scene;
@@ -12,7 +13,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
     output::{OutputHandler, OutputState},
-    reexports::calloop::EventLoop,
+    reexports::calloop::{EventLoop, LoopHandle},
     reexports::calloop_wayland_source::WaylandSource,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -33,12 +34,26 @@ use wayland_client::{
 };
 
 use crate::app::{App, Layer, Output, OutputId, Paint, Redraw, SurfaceId, SurfaceSpec};
+use crate::gles;
 use crate::socket::{self, Socket};
+
+/// Whether surfaces are drawn with OpenGL ES once it has started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Gpu {
+    /// The GPU starts in the background after the first frame, which the
+    /// CPU draws, and every surface moves to it once it is ready, so that
+    /// the panels appear at once and nothing waits for the GPU.
+    #[default]
+    Enabled,
+    /// Every surface on the CPU, for the memory: measured with NVIDIA's
+    /// driver, the GPU adds about 100 MB to tonish even while idle.
+    Disabled,
+}
 
 /// Returns `Ok` after a quit message, SIGINT (Ctrl+C) or SIGTERM, once the
 /// loop has finished what it was doing. The errors are strings, because the
 /// only thing a caller does with them is print them.
-pub fn run(app: Box<dyn App>) -> Result<(), String> {
+pub fn run(app: Box<dyn App>, gpu: Gpu) -> Result<(), String> {
     // Before connecting to Wayland, so that a second instance stops before
     // it has made a single surface.
     let listening = app.socket().map(|path| socket::listen(&path)).transpose()?;
@@ -131,9 +146,13 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
         pool: SlotPool::new(1 << 16, &shm).map_err(|e| e.to_string())?,
         shm,
         qh,
+        conn: conn.clone(),
+        handle: event_loop.handle(),
         outs: Vec::new(),
         app,
         scene: Scene::new(),
+        gpu,
+        gles: GlesState::NotStarted,
         watch,
         quit: false,
     };
@@ -152,6 +171,9 @@ pub fn run(app: Box<dyn App>) -> Result<(), String> {
 }
 
 struct Surface {
+    /// Before `layer`, so that it is dropped first: EGL draws into the
+    /// wl_surface until its window is gone.
+    window: Option<gles::Window>,
     layer: LayerSurface,
     spec: SurfaceSpec,
     /// Logical pixels: the buffer is this times the output's scale.
@@ -202,11 +224,29 @@ struct Engine {
     shm: Shm,
     pool: SlotPool,
     qh: QueueHandle<Engine>,
+    /// For EGL, which works on the connection's wl_display.
+    conn: Connection,
+    /// For the source that hears when the GPU has started, added only once
+    /// the GPU is needed.
+    handle: LoopHandle<'static, Engine>,
     outs: Vec<Out>,
     app: Box<dyn App>,
     scene: Scene,
+    gpu: Gpu,
+    gles: GlesState,
     watch: Option<Watch>,
     quit: bool,
+}
+
+enum GlesState {
+    NotStarted,
+    /// While the CPU goes on drawing every surface.
+    Starting(gles::Thread),
+    /// Draws every surface.
+    Running(gles::Thread),
+    /// It failed to start or to draw, and is not tried again: a driver
+    /// that failed once is likely to fail again.
+    Failed,
 }
 
 impl Engine {
@@ -290,6 +330,7 @@ impl Engine {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
         Surface {
+            window: None,
             layer,
             spec,
             size: (0, 0),
@@ -376,16 +417,55 @@ impl Engine {
         if !surf.configured || surf.size.0 == 0 || surf.size.1 == 0 {
             return;
         }
-        let size = (surf.size.0 as f32, surf.size.1 as f32);
         let started = Instant::now();
         self.scene.clear();
         let mut paint = Paint {
             scene: &mut self.scene,
-            size,
+            size: (surf.size.0 as f32, surf.size.1 as f32),
             scale: scale as f32,
         };
         self.app.draw(out.info.id, SurfaceId(si), &mut paint);
-        let (w, h) = (surf.size.0 as i32 * scale, surf.size.1 as i32 * scale);
+        let size = (surf.size.0 as i32 * scale, surf.size.1 as i32 * scale);
+        if let GlesState::Running(thread) = &mut self.gles {
+            let built = started.elapsed();
+            let monitor = name(&out.info).to_owned();
+            let surf = &mut self.outs[oi].surfaces[si];
+            let frame = gles::Frame {
+                surface: surf.layer.wl_surface().clone(),
+                size,
+                scale,
+                scene: std::mem::take(&mut self.scene),
+                monitor,
+                index: si,
+                built,
+                sent: Instant::now(),
+            };
+            // The GPU's thread logs the draw.
+            surf.window
+                .get_or_insert_with(|| thread.window())
+                .draw(frame);
+            return;
+        }
+        surf.layer.wl_surface().set_buffer_scale(scale);
+        self.draw_cpu(oi, si, size, scale);
+        debug!(
+            monitor = %name(&self.outs[oi].info),
+            surface = si,
+            size = ?size,
+            on = %"cpu",
+            took = ?started.elapsed(),
+            "drew"
+        );
+        // After the first frame, so that it doesn't wait even for the
+        // thread to be made.
+        if self.gpu == Gpu::Enabled && matches!(self.gles, GlesState::NotStarted) {
+            self.start_gpu();
+        }
+    }
+
+    fn draw_cpu(&mut self, oi: usize, si: usize, (w, h): (i32, i32), scale: i32) {
+        let out = &mut self.outs[oi];
+        let surf = &mut out.surfaces[si];
         let (buffer, px) = match self
             .pool
             .create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
@@ -398,18 +478,74 @@ impl Engine {
         };
         renderer::cpu::draw(px, w as usize, h as usize, scale as f32, &self.scene.shapes);
         let ws = surf.layer.wl_surface();
-        ws.set_buffer_scale(scale);
         if buffer.attach_to(ws).is_ok() {
             ws.damage_buffer(0, 0, w, h);
         }
         surf.layer.commit();
-        debug!(
-            monitor = %name(&out.info),
-            surface = si,
-            size = ?(w, h),
-            took = ?started.elapsed(),
-            "drew"
-        );
+    }
+
+    fn start_gpu(&mut self) {
+        let (report, reports) = channel::channel();
+        let started = self
+            .handle
+            .insert_source(reports, |event, _, engine| {
+                if let Event::Msg(report) = event {
+                    engine.gpu_reported(report);
+                }
+            })
+            .map_err(|e| e.error.to_string())
+            .and_then(|_| gles::Thread::start(self.conn.clone(), report));
+        self.gles = match started {
+            Ok(thread) => GlesState::Starting(thread),
+            Err(e) => {
+                warn!("cannot use the GPU, so every surface is drawn on the CPU: {e}");
+                GlesState::Failed
+            }
+        };
+    }
+
+    /// Once the GPU has started, every surface is drawn at once, which
+    /// moves it, rather than at its next draw: a panel may not be drawn
+    /// again for a long time.
+    fn gpu_reported(&mut self, report: gles::Report) {
+        match report {
+            gles::Report::Started => {
+                self.gles = match std::mem::replace(&mut self.gles, GlesState::Failed) {
+                    GlesState::Starting(thread) => GlesState::Running(thread),
+                    other => other,
+                };
+                for oi in 0..self.outs.len() {
+                    for si in 0..self.outs[oi].surfaces.len() {
+                        self.draw(oi, si);
+                    }
+                }
+            }
+            gles::Report::Failed(e) if matches!(self.gles, GlesState::Starting(_)) => {
+                warn!("cannot use the GPU, so every surface is drawn on the CPU: {e}");
+                self.gles = GlesState::Failed;
+            }
+            gles::Report::Failed(e) => self.stop_gpu(&e),
+        }
+    }
+
+    /// Replaces every surface on the GPU with a new one, which the CPU draws
+    /// once the compositor configures it. The CPU cannot draw into the old
+    /// ones: a compositor with explicit sync rejects a shared-memory buffer
+    /// on a surface EGL has drawn into. Surfaces without a window stay as
+    /// they are.
+    fn stop_gpu(&mut self, e: &str) {
+        warn!("the GPU failed, so every surface is drawn on the CPU: {e}");
+        self.gles = GlesState::Failed;
+        for oi in 0..self.outs.len() {
+            for si in 0..self.outs[oi].surfaces.len() {
+                if self.outs[oi].surfaces[si].window.is_none() {
+                    continue;
+                }
+                let wl = self.outs[oi].wl.clone();
+                let spec = self.outs[oi].surfaces[si].spec.clone();
+                self.outs[oi].surfaces[si] = self.layer(&wl, spec);
+            }
+        }
     }
 }
 
@@ -619,7 +755,7 @@ mod tests {
             std::env::remove_var("WAYLAND_SOCKET");
             std::env::set_var("WAYLAND_DISPLAY", "tonish-no-such-display");
         }
-        let err = run(Box::new(Nothing)).unwrap_err();
+        let err = run(Box::new(Nothing), Gpu::default()).unwrap_err();
         assert!(err.starts_with("no Wayland display"), "{err}");
     }
 }

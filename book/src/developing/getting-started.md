@@ -7,7 +7,7 @@
 | Rust, current stable | everything; the workspace uses edition 2024 |
 | [just](https://github.com/casey/just) | the recipes below |
 | [cargo-nextest](https://nexte.st) | `just test` |
-| sway, grim | `just desktop`, the tests on a headless sway |
+| sway, grim, Mesa | `just desktop`, the tests on a headless sway. Mesa's software renderer stands in for the GPU there, even on a machine with an NVIDIA driver. |
 | [uv](https://docs.astral.sh/uv/) | The Python tools: pytest for `just desktop`, ruff for `just fmt` and `just lint`. uv installs them at the versions in `uv.lock`. |
 | [mdBook](https://rust-lang.github.io/mdBook/) 0.5 | `just book`, this book |
 
@@ -33,8 +33,8 @@
 
 | Path | What's there |
 |---|---|
-| `crates/renderer` | Shapes, scenes and the CPU rasteriser. It knows nothing of Wayland. |
-| `crates/engine` | The Wayland side: monitors, layer surfaces, the event loop, the socket, file watching. |
+| `crates/renderer` | Shapes, scenes, the CPU rasteriser, and the OpenGL ES backend with its shaders in `gpu/`. It knows nothing of Wayland. |
+| `crates/engine` | The Wayland side: monitors, layer surfaces, EGL, the event loop, the socket, file watching. |
 | `crates/tonish` | The shell: panels, settings, the command line, messages, logging. |
 | `assets/default-config.toml` | The default settings, compiled into tonish and written on its first start. |
 | `tests/desktop/` | The desktop tests, for pytest. |
