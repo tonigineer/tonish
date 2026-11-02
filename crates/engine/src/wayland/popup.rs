@@ -221,6 +221,7 @@ impl Engine {
             viewport,
             popup,
             size: (w.max(1), h.max(1)),
+            mapped: false,
         });
         Ok(())
     }
@@ -244,7 +245,10 @@ impl Engine {
                 let ws = g.popup.wl_surface();
                 ws.set_input_region(Some(part.wl_region()));
                 ws.commit();
-                &none
+                // Until its first buffer maps it, the grab's surface takes
+                // nothing, and a click let through would land on what is
+                // under the popup, which ends the grab as a click outside.
+                if g.mapped { &none } else { &part }
             }
             None => &part,
         };
@@ -279,6 +283,8 @@ pub(super) struct Grab {
     viewport: Option<WpViewport>,
     pub(super) popup: Popup,
     size: (i32, i32),
+    /// It has a buffer, so that it takes the pointer.
+    mapped: bool,
 }
 
 impl Drop for Grab {
@@ -299,7 +305,7 @@ impl PopupHandler for Engine {
         popup: &Popup,
         _: PopupConfigure,
     ) {
-        let Some(g) = self.grab.as_ref().filter(|g| &g.popup == popup) else {
+        let Some(g) = self.grab.as_mut().filter(|g| &g.popup == popup) else {
             return;
         };
         // One pixel stretched over it, where the compositor can stretch it,
@@ -324,6 +330,12 @@ impl PopupHandler for Engine {
             ws.damage_buffer(0, 0, bw, bh);
         }
         ws.commit();
+        // Its clicks move over to it in the commits after the one that
+        // maps it, which the compositor applies in order.
+        let first = !std::mem::replace(&mut g.mapped, true);
+        if first && let Some(spec) = self.wanted.clone() {
+            self.popup_input(&spec);
+        }
     }
 
     /// The compositor ends the grab on a click outside the app's surfaces.
