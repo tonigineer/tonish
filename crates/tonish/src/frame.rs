@@ -20,6 +20,7 @@ use renderer::shapes::Joined;
 use renderer::{Fillet, Point, Rgba, Rim, Scene};
 
 use crate::config;
+use crate::liquid;
 use crate::shell::{Orientation, Panel};
 use crate::theme::Theme;
 
@@ -245,6 +246,117 @@ impl Layout {
             bar,
         }
     }
+}
+
+/// The straight edges a card may dock to besides the bar's: the frame's
+/// inside edges, or without a frame, the monitor's own, each between the
+/// corners at its ends, and on the bar's side, beside the bar. The bar is
+/// the first of `panels` along an edge, as for [`Layout::new`].
+pub fn edges(
+    screen: (f32, f32),
+    f: Option<&Frame>,
+    corners: f32,
+    panels: &[Panel],
+) -> Vec<liquid::Edge> {
+    let bar = panels.iter().find(|p| p.along_edge());
+    // Along the bar's edge and across it, as in `Layout::new`.
+    let side = bar.map_or(Side::Below, |p| p.side());
+    let (sw, sh) = screen;
+    let (length, depth) = match side {
+        Side::Above | Side::Below => (sw, sh),
+        Side::Left | Side::Right => (sh, sw),
+    };
+    let at = |along: f32, across: f32| match side {
+        Side::Below => Point::new(along, across),
+        Side::Above => Point::new(along, depth - across),
+        Side::Right => Point::new(across, along),
+        Side::Left => Point::new(depth - across, along),
+    };
+    let local = |p: Point| match side {
+        Side::Below => (p.x, p.y),
+        Side::Above => (p.x, depth - p.y),
+        Side::Right => (p.y, p.x),
+        Side::Left => (p.y, depth - p.x),
+    };
+    let (w, ir, overlap) = f.map_or((0.0, 0.0, 0.0), |f| {
+        (f.width, f.inverse_radius, f.border.ceil())
+    });
+    let cut = cut(f, corners);
+    // Where the sides across the bar's edge start, at either end of it,
+    // and the stretches along the bar's side, beside the bar.
+    let mut start = (cut, cut);
+    let mut near = vec![(cut, length - cut)];
+    if let Some(p) = bar {
+        let (g, t) = (p.gap, p.thickness);
+        if p.spans() {
+            near.clear();
+            let below = match f {
+                Some(_) if g > 0.0 => w + g + t + ir.min(g / 2.0),
+                Some(_) => t + ir,
+                None => g + t,
+            };
+            start = (below.max(corners), below.max(corners));
+        } else {
+            let (x, y) = p.origin(screen);
+            let (dx, dy) = p.size(screen);
+            let (u, v) = (local(Point::new(x, y)), local(Point::new(x + dx, y + dy)));
+            let (a0, a1, reach) = (u.0.min(v.0), u.0.max(v.0), u.1.max(v.1));
+            // A bar its edge runs on into is part of that one dock.
+            near = if p.merges() {
+                Vec::new()
+            } else {
+                vec![(cut, a0 - g), (a1 + g, length - cut)]
+            };
+            // A bar that reaches into a corner: the side starts below it.
+            if a0 < cut {
+                start.0 = start.0.max(reach + ir);
+            }
+            if a1 > length - cut {
+                start.1 = start.1.max(reach + ir);
+            }
+        }
+    }
+    let edge = |from: (f32, f32), to: (f32, f32), inward: (f32, f32)| {
+        let (p, q) = (at(from.0, from.1), at(to.0, to.1));
+        let o = at(from.0 + inward.0, from.1 + inward.1);
+        let (side, edge, straight) = if p.y == q.y {
+            let side = if o.y > p.y { Side::Below } else { Side::Above };
+            (side, p.y, (p.x.min(q.x), p.x.max(q.x)))
+        } else {
+            let side = if o.x > p.x { Side::Right } else { Side::Left };
+            (side, p.x, (p.y.min(q.y), p.y.max(q.y)))
+        };
+        liquid::Edge {
+            side,
+            edge,
+            overlap,
+            screen,
+            straight,
+        }
+    };
+    let mut edges: Vec<_> = (near.into_iter())
+        .map(|(a0, a1)| edge((a0, w), (a1, w), (0.0, 1.0)))
+        .collect();
+    edges.push(edge(
+        (cut, depth - w),
+        (length - cut, depth - w),
+        (0.0, -1.0),
+    ));
+    edges.push(edge((w, start.0), (w, depth - cut), (1.0, 0.0)));
+    edges.push(edge(
+        (length - w, start.1),
+        (length - w, depth - cut),
+        (-1.0, 0.0),
+    ));
+    edges.retain(|e| e.straight.1 > e.straight.0);
+    edges
+}
+
+/// How far in from the monitor's corners an edge along it runs straight:
+/// past the frame's curved corners inside, or without a frame, past the
+/// monitor's own round corners.
+pub fn cut(f: Option<&Frame>, corners: f32) -> f32 {
+    f.map_or(0.0, |f| f.width + f.inverse_radius).max(corners)
 }
 
 /// On whole logical pixels, as surfaces are placed, the same way for every

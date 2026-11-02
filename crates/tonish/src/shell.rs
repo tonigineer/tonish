@@ -257,10 +257,11 @@ impl Shell {
     ) -> Option<liquid::Card> {
         let place = self.place(output, surface, size)?;
         let (x, y) = place.spec.parent_at;
-        let home = place.frame.local((x as f32 + at.0, y as f32 + at.1)).0;
-        let home = home.clamp(place.dock.0, place.dock.1);
+        let bar = place.docks[0];
+        let home = bar.edge.local((x as f32 + at.0, y as f32 + at.1)).0;
+        let home = home.clamp(bar.range.0, bar.range.1);
         let anim = self.monitors.get(&output)?.config.animation;
-        let mut card = liquid::Card::new(place.spec, place.frame, size, home, place.dock, anim);
+        let mut card = liquid::Card::new(place.spec, place.docks, size, home, anim);
         // A step of no time, for the input region the engine needs before
         // the first frame.
         card.step(0.0);
@@ -272,11 +273,13 @@ impl Shell {
     /// panel rather than covers it, and docks no nearer the panel's ends
     /// than its straight inner edge allows, with room for the concave
     /// corners: past that, they would curve out of nothing. On a panel too
-    /// short for that, it docks at the panel's start.
+    /// short for that, it docks at the panel's start. It may dock to the
+    /// other straight edges [`frame::edges`] finds too, where it fits.
     fn place(&self, output: OutputId, surface: SurfaceId, size: (f32, f32)) -> Option<Place> {
         let monitor = self.monitors.get(&output)?;
         let (out, config) = (&monitor.output, &monitor.config);
-        let pieces = monitor.screen.pieces(out.size);
+        let screen = &monitor.screen;
+        let pieces = screen.pieces(out.size);
         let Some(Piece::Panel(panel)) = pieces.get(surface.0).copied() else {
             return None;
         };
@@ -286,38 +289,79 @@ impl Shell {
             (Orientation::Vertical, Anchor::Right) => Side::Left,
             (Orientation::Vertical, _) => Side::Right,
         };
-        let room = liquid::Look::new(config).room(side, size);
-        let (length, card) = match panel.orientation {
-            Orientation::Horizontal => (panel.size(out.size).0, size.0),
-            Orientation::Vertical => (panel.size(out.size).1, size.1),
+        let length = match panel.orientation {
+            Orientation::Horizontal => panel.size(out.size).0,
+            Orientation::Vertical => panel.size(out.size).1,
         };
         let (first, last) = panel.far_corners();
-        let (lo, hi) = (
-            panel.room() + first + room,
-            length - panel.room() - last - room - card,
-        );
         // Where the panel starts along the bar, and the bar's edge across, on
         // the monitor, which the popup covers.
         let (x, y) = panel.origin(out.size);
         let t = panel.thickness;
+        // A bar that runs on into the frame's edge hangs cards from there,
+        // past its own edge where it is the thinner.
+        let merged = panel.frame.filter(|_| panel.merges());
+        let reach = merged.map_or(t, |f| f.width);
         let (origin, edge) = match side {
-            Side::Below => (x, y + t),
-            Side::Above => (x, y),
-            Side::Right => (y, x + t),
-            Side::Left => (y, x),
+            Side::Below => (x, y + reach),
+            Side::Above => (x, y + t - reach),
+            Side::Right => (y, x + reach),
+            Side::Left => (y, x + t - reach),
         };
-        let frame = liquid::Frame {
+        let mut straight = (
+            origin + panel.room() + first,
+            origin + length - panel.room() - last,
+        );
+        if let Some(f) = merged {
+            let along = match side {
+                Side::Above | Side::Below => out.size.0,
+                Side::Left | Side::Right => out.size.1,
+            };
+            let cut = frame::cut(Some(&f), screen.corners.radius);
+            straight = (cut, along - cut);
+        }
+        let bar = liquid::Edge {
             side,
             edge,
-            bar: (
-                origin + panel.room() + first,
-                origin + length - panel.room() - last,
-            ),
+            straight,
             // Over the bar's border, so that its line runs into the
             // card's instead of beside it.
             overlap: panel.edges.border.ceil(),
             screen: out.size,
         };
+        let look = liquid::Look::new(config);
+        let dock = |edge: liquid::Edge| {
+            let room = look.room(edge.side, size);
+            let card = match edge.side {
+                Side::Above | Side::Below => size.0,
+                Side::Left | Side::Right => size.1,
+            };
+            let (lo, hi) = (
+                edge.straight.0 + room + card / 2.0,
+                edge.straight.1 - room - card / 2.0,
+            );
+            liquid::Dock {
+                edge,
+                range: (lo, hi.max(lo)),
+                corners: [None, None],
+            }
+        };
+        let others = frame::edges(
+            out.size,
+            screen.frame.as_ref(),
+            screen.corners.radius,
+            &screen.panels,
+        );
+        let mut docks = vec![dock(bar)];
+        docks.extend(
+            (others.into_iter())
+                .map(dock)
+                .filter(|d| d.range.1 > d.range.0),
+        );
+        let edges: Vec<_> = docks.iter().map(|d| d.edge).collect();
+        for d in &mut docks {
+            d.corners = [0, 1].map(|end| d.edge.across_end(end, &edges));
+        }
         let spec = PopupSpec {
             parent: (output, surface),
             at: (0, 0),
@@ -326,8 +370,7 @@ impl Shell {
             input: None,
             parent_at: (x as i32, y as i32),
         };
-        let dock = (origin + lo + card / 2.0, origin + hi.max(lo) + card / 2.0);
-        Some(Place { frame, dock, spec })
+        Some(Place { docks, spec })
     }
 
     /// The figures come after all of a monitor's other surfaces.
@@ -371,9 +414,9 @@ impl Shell {
 
 /// Where a card hangs from a panel, as [`Shell::place`] finds it.
 struct Place {
-    frame: liquid::Frame,
-    /// Along the bar, where the card's middle may hang.
-    dock: (f32, f32),
+    /// The panel's own first, which the card opens from, then the other
+    /// edges it may dock to.
+    docks: Vec<liquid::Dock>,
     spec: PopupSpec,
 }
 
@@ -460,6 +503,14 @@ impl Panel {
         self.frame
             .filter(|_| self.gap > 0.0)
             .map_or(0.0, |f| f.width)
+    }
+
+    /// Inside a frame, without a gap, and no thicker than the frame: its
+    /// inner edge runs on into the frame's as one straight edge, and a card
+    /// docks along all of it.
+    pub fn merges(&self) -> bool {
+        self.frame
+            .is_some_and(|f| self.gap == 0.0 && !self.spans() && self.thickness <= f.width + 0.5)
     }
 
     /// How far in from its ends, along its far side, what hangs from it
@@ -753,7 +804,7 @@ impl App for Shell {
             (Some(p), Some(place)) => {
                 p.anim = self.monitors[&p.spec.parent.0].config.animation;
                 p.spec.parent_at = place.spec.parent_at;
-                p.reframe(place.frame, place.dock);
+                p.reframe(place.docks);
             }
             (Some(_), None) => self.popup = None,
             (None, _) => {}
@@ -913,7 +964,7 @@ impl App for Shell {
         p.drawn = moving.then_some(paint.time);
         if let Some(m) = self.monitors.get(&p.spec.parent.0) {
             let look = liquid::Look::new(&m.config);
-            liquid::draw(paint.scene, &p.frame, &look, &p.pose(), &self.theme);
+            liquid::draw(paint.scene, &p.edge, &look, &p.pose(), &self.theme);
         }
         if p.gone() {
             self.popup = None;
@@ -1451,6 +1502,58 @@ mod tests {
         // At the bottom left, and at the top left beside the shorter bar.
         assert!(solid(&l, 9.0, 1071.0) && !solid(&l, 8.0 + 16.0, 1072.0 - 16.0));
         assert!(solid(&l, 9.0, 9.0) && !solid(&l, 8.0 + 16.0, 8.0 + 16.0));
+    }
+
+    /// The edges a settings card on DP-1 may dock to: side, where across,
+    /// and where straight along.
+    fn docks(text: &str) -> Vec<(Side, f32, (f32, f32))> {
+        let mut shell = shell_on_dp1(text);
+        let si = names(&mut shell).iter().position(|n| *n == "panel");
+        let place = shell.place(OutputId(1), SurfaceId(si.unwrap()), settings::SIZE);
+        (place.unwrap().docks.iter())
+            .map(|d| (d.edge.side, d.edge.edge, d.edge.straight))
+            .collect()
+    }
+
+    #[test]
+    fn a_card_docks_to_the_bar_and_the_frame_s_sides_inside_its_curves() {
+        let framed = docks("return { frame = { width = 8, inverse_radius = 16 } }");
+        assert_eq!(
+            framed,
+            [
+                (Side::Below, 44.0, (24.0, 1896.0)),
+                (Side::Above, 1072.0, (24.0, 1896.0)),
+                (Side::Right, 8.0, (60.0, 1056.0)),
+                (Side::Left, 1912.0, (60.0, 1056.0)),
+            ]
+        );
+        // A bar no thicker than the frame runs on into it as one edge.
+        let text = "return { bar = { length = 1536, thickness = 32 }, \
+                    frame = { width = 32, inverse_radius = 10 } }";
+        assert_eq!(
+            docks(text)[..2],
+            [
+                (Side::Below, 32.0, (42.0, 1878.0)),
+                (Side::Above, 1048.0, (42.0, 1878.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_frame_a_card_docks_to_the_monitor_s_edges_beside_the_bar() {
+        // The bar's surface from 446 to 1474, with its curves.
+        let text =
+            "return { bar = { length = 1000, inverse_radius = 14 }, corners = { radius = 12 } }";
+        assert_eq!(
+            docks(text)[1..],
+            [
+                (Side::Below, 0.0, (12.0, 446.0)),
+                (Side::Below, 0.0, (1474.0, 1908.0)),
+                (Side::Above, 1080.0, (12.0, 1908.0)),
+                (Side::Right, 0.0, (12.0, 1068.0)),
+                (Side::Left, 1920.0, (12.0, 1068.0)),
+            ]
+        );
     }
 
     #[test]

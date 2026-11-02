@@ -80,3 +80,21 @@ def test_a_translucent_frame_is_drawn_once_everywhere(desktop):
         (1908, 1068),
     ]:
         assert desktop.at(x, y) == desktop.at(*side), (x, y, desktop.at(x, y))
+
+
+def test_a_card_pulled_off_the_bar_docks_to_the_frame_s_side(desktop):
+    framed(desktop, 'return { frame = { width = 8, color = "#ff1318" } }')
+    desktop.click(800, 20, "BTN_RIGHT")
+    assert wait_for(lambda: "popup grabbed" in desktop.logged()), desktop.logged()
+    # Off the bar by its grip, 9 below its top, and over to the left, its
+    # left side 30 from the frame's and its middle 81 below the grip.
+    desktop.drag([(800, 53), (800, 300), (800, 600)], seconds=0.6)
+    assert wait_for(lambda: near(desktop.at(800, 680), SURFACE)), desktop.at(800, 680)
+    desktop.drag([(800, 600), (500, 560), (8 + 140 + 30, 500)], seconds=0.8)
+    # Docked, from the frame's side at 8 to 288; let go free, it would run
+    # from 38 to 318.
+    assert wait_for(lambda: not near(desktop.at(300, 581), SURFACE)), desktop.at(
+        300, 581
+    )
+    assert near(desktop.at(12, 581), SURFACE), desktop.at(12, 581)
+    assert near(desktop.at(4, 581), (0xFF, 0x13, 0x18)), desktop.at(4, 581)

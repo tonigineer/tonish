@@ -1,11 +1,11 @@
-//! The card as one liquid with the bar, from its pose.
+//! The card as one liquid with the edge, from its pose.
 
 use engine::Side;
 use renderer::shapes::{Bulge, Neck, Wave};
 use renderer::{Circle, Liquid, Point, Rgba, RoundedRect, Scene, Shape};
 
 use super::pose::{GRIP, GRIP_IN};
-use super::{Frame, Pose};
+use super::{Edge, Pose};
 use crate::config::{Config, Ripples};
 use crate::hang::Edges;
 use crate::theme::Theme;
@@ -34,20 +34,20 @@ impl Look {
         }
     }
 
-    /// Fitted to a card of `size` hanging on `side` of the bar.
+    /// Fitted to a card of `size` hanging on `side` of its edge.
     pub fn edges(&self, side: Side, size: (f32, f32)) -> Edges {
         let pose = Pose::hanging(0.0, size, side);
         self.edges.fit(pose.depth(side), side)
     }
 
-    /// Room at each end of such a card, along the bar, for its concave
+    /// Room at each end of such a card, along the edge, for its concave
     /// corners.
     pub fn room(&self, side: Side, size: (f32, f32)) -> f32 {
         self.edges(side, size).inverse_radius
     }
 }
 
-/// The waves the card leaves on the bar's edge, `t` seconds after they
+/// The waves the card leaves on the edge, `t` seconds after they
 /// started, as on water after a drop falls in: they rise over a tenth of a
 /// second, then run apart along the edge at 60 pixels a second and die
 /// away, their crests running at twice that.
@@ -99,7 +99,7 @@ fn mix(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// The radii of a card off the bar: the corners at the bar, hidden in it
+/// The radii of a card off the edge: the corners at the edge, hidden in it
 /// while the card hangs, round like the ones across from them.
 fn free(side: Side, [tl, tr, br, bl]: [f32; 4]) -> [f32; 4] {
     match side {
@@ -110,15 +110,15 @@ fn free(side: Side, [tl, tr, br, bl]: [f32; 4]) -> [f32; 4] {
     }
 }
 
-/// The card, the neck that joins it to the bar while it is pulled off, the
-/// bar's edge with its bulge and waves, the bead a collapsing neck leaves and
-/// the grip, in the bar's colour and melted into the bar, so that they read
-/// as one liquid. Early in its opening the card is narrow along the bar and
+/// The card, the neck that joins it to its edge while it is pulled off, the
+/// edge with its bulge and waves, the bead a collapsing neck leaves and the
+/// grip, in the bar's colour and melted into the edge, so that they read as
+/// one liquid. Early in its opening the card is narrow along the edge and
 /// reaches out like a drop leaving it, as pleama-rs's cards do; pulled off,
 /// it takes its own shape early, and the neck carries the join until it
 /// collapses.
-pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Theme) {
-    let side = frame.side;
+pub fn draw(scene: &mut Scene, edge: &Edge, look: &Look, card: &Pose, t: &Theme) {
+    let side = edge.side;
     let e = look.edges(side, card.size);
     let b = e.border;
     let g = card.grow.max(0.0);
@@ -132,14 +132,21 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
         * (0.3 + 0.7 * smoothstep(0.0, 0.9, g))
         * (1.0 + (g - 1.0).max(0.0) * 0.5)
         * (1.0 + sa - 0.5 * sc);
-    // Across: hanging, from inside the bar out to its far edge, grown out of
-    // the bar by `g`; free, its own box, grown about its middle. In between,
-    // its near edge slides from one to the other. Past an end of the bar it
-    // is its own box at once, round at its corners there: the part of it in
-    // the bar's row past the bar's end would be cut off square.
+    // Across: hanging, from inside the edge out to the card's far side,
+    // grown out of the edge by `g`; free, its own box, grown about its
+    // middle. In between, its near side slides from one to the other. Past
+    // an end of the straight edge it is its own box at once, round at its
+    // corners there: the part of it in the edge's row past its end would be
+    // cut off square. Toward a corner, it ends at the edge across instead.
     let ends = (card.along - length / 2.0, card.along + length / 2.0);
-    let over = (frame.bar.0 - ends.0).max(ends.1 - frame.bar.1);
+    let limit = [
+        card.corners[0].map_or(edge.straight.0, |c| c.edge),
+        card.corners[1].map_or(edge.straight.1, |c| c.edge),
+    ];
+    let over = (limit[0] - ends.0).max(ends.1 - limit[1]);
     let own = (2.5 * det).max(smoothstep(0.0, 8.0, over)).min(1.0);
+    let shown = g >= 0.002;
+    let attached = shown && card.joined && det < 0.995;
     let hang_far = -into + (card.across + a / 2.0 + into) * g;
     let near = mix(-into, card.across - a / 2.0 * g, own);
     let far = mix(hang_far, card.across + a / 2.0 * g, own);
@@ -150,11 +157,10 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
         across: (mid - depth / 2.0, mid + depth / 2.0),
         radii: free(side, e.radii),
     };
-    let shown = g >= 0.002;
-    // A liquid bridge from the bar to the card's near edge, shaped as a soap
+    // A liquid bridge from the edge to the card's near side, shaped as a soap
     // film between two rings: it hardly narrows as it stretches, until at
     // the break it collapses all at once, and the stubs it leaves snap back
-    // into the bar and the card.
+    // into the edge and the card.
     let ring = l * g.min(1.0) * look.thickness * 0.2;
     let neck = if shown && card.joined && det > 0.001 && det < 0.995 {
         // Thinner as the card stretches away, thicker as it squashes back:
@@ -185,7 +191,7 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
             }
         })
     };
-    // The bar's edge swells after the card while the neck stretches, most
+    // The edge swells after the card while the neck stretches, most
     // halfway, and is kicked as it breaks or joins.
     let sag = 96.0 * det * (1.0 - det) * (1.0 - 0.5 * det) * g.min(1.0) + card.bounce;
     let bulge = (shown && sag > 0.05).then_some(Bulge {
@@ -193,29 +199,50 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
         height: sag,
     });
     let wave = card.ripple.and_then(|(at, s)| wave(at, s, &look.ripples));
-    // The card's own corners at the bar, no wider than the bar's edge
-    // reaches past its sides; the neck brings its own blend.
-    let space = (ends.0 - frame.bar.0).min(frame.bar.1 - ends.1).max(0.0);
-    let blend = (e.inverse_radius * smoothstep(0.0, 0.3, g)).min(space);
-    let attached = shown && card.joined && det < 0.995;
+    // The card's own corners at the edge, no wider than the straight edge
+    // reaches past its sides; the neck brings its own blend. Toward a
+    // corner, the edge across cuts off what would curve into nothing.
+    let room = |end: f32, corner: Option<Edge>| corner.map_or(end.max(0.0), |_| f32::INFINITY);
+    let space = room(ends.0 - edge.straight.0, card.corners[0])
+        .min(room(edge.straight.1 - ends.1, card.corners[1]));
+    let curve = e.inverse_radius * smoothstep(0.0, 0.3, g);
+    let blend = curve.min(space);
+    let joins: Vec<_> = (card.corners.iter().flatten())
+        .filter(|_| attached)
+        .filter_map(|c| join(c, edge, &card_box, card, look, into))
+        .collect();
 
     let layer = |inset: f32, color: Rgba, out: &mut Vec<Box<dyn Shape>>| {
-        let edge = Edge {
-            frame,
+        let shore = EdgeLiquid {
+            edge,
             inset,
             blend: blend + inset,
             wave,
             bulge,
+            corners: card.corners,
         };
         if attached {
-            // One liquid: the card, its neck, and the bar's edge.
-            let reach = edge.reach(Some(&card_box), neck.as_ref());
-            out.push(Box::new(edge.liquid(&card_box, neck, reach, color)));
+            // One liquid: the card, its neck, and the edge.
+            let reach = shore.reach(Some(&card_box), neck.as_ref());
+            out.push(Box::new(shore.liquid(&card_box, neck, reach, color)));
+            // And with each edge across a corner it is near.
+            for j in &joins {
+                let shore = EdgeLiquid {
+                    edge: &j.edge,
+                    inset,
+                    blend: curve + inset,
+                    wave: None,
+                    bulge: j.bulge,
+                    corners: j.corners,
+                };
+                let reach = shore.reach(Some(&j.card), j.neck.as_ref());
+                out.push(Box::new(shore.liquid(&j.card, j.neck, reach, color)));
+            }
         } else {
-            // The card on its own, round on every side, and the bar's edge
+            // The card on its own, round on every side, and the edge
             // only where it moves.
             if shown {
-                out.push(Box::new(card_box.rounded(frame, inset, color)));
+                out.push(Box::new(card_box.rounded(edge, inset, color)));
             }
             if wave.is_some() || bulge.is_some() || neck.is_some() {
                 let sunk = Blob {
@@ -223,8 +250,8 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
                     across: (-into, -into),
                     radii: [0.0; 4],
                 };
-                let reach = edge.reach(None, neck.as_ref());
-                out.push(Box::new(edge.liquid(&sunk, neck, reach, color)));
+                let reach = shore.reach(None, neck.as_ref());
+                out.push(Box::new(shore.liquid(&sunk, neck, reach, color)));
             }
         }
         // The bead the collapse leaves in the middle falls into the card.
@@ -233,7 +260,7 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
             if r > 0.0 {
                 let f = 1.0 - stray;
                 out.push(Box::new(Circle {
-                    center: frame.at(mix(at, card.along, f), near * (0.5 + 0.5 * f)),
+                    center: edge.at(mix(at, card.along, f), near * (0.5 + 0.5 * f)),
                     r,
                     color,
                 }));
@@ -249,25 +276,101 @@ pub fn draw(scene: &mut Scene, frame: &Frame, look: &Look, card: &Pose, t: &Them
     layer(b, t.surface, &mut shapes);
     scene.shapes.extend(shapes);
 
-    // The grip, along the middle of the card's edge nearest the bar, once
-    // it is open.
+    // The grip, along the middle of the card's top as it shows, out of
+    // the edge it hangs from, once it is open.
     let fade = smoothstep(0.7, 1.0, g);
     if fade > 0.0 {
-        let at = near.max(0.0) + GRIP_IN;
-        let [p0, p1] = frame.rect(
-            (card.along - GRIP.0 / 2.0, at - GRIP.1 / 2.0),
-            (card.along + GRIP.0 / 2.0, at + GRIP.1 / 2.0),
-        );
+        let [p0, p1] = edge.rect((ends.0, near.max(0.0)), (ends.1, far));
+        let (x, y) = ((p0.x + p1.x) / 2.0, p0.y + GRIP_IN);
         scene.push(RoundedRect {
-            p0,
-            p1,
+            p0: Point::new(x - GRIP.0 / 2.0, y - GRIP.1 / 2.0),
+            p1: Point::new(x + GRIP.0 / 2.0, y + GRIP.1 / 2.0),
             radii: [GRIP.1 / 2.0; 4],
             color: t.on_surface.alpha(fade * (0.25 + 0.35 * card.grip)),
         });
     }
 }
 
-/// The neck between the bar and a card pulled off it, along and across.
+/// The card's join to an edge across a corner of the one it hangs from,
+/// as one more liquid: the card melted into that edge where it is near, and
+/// further off, on a neck from it, which thins away as the card goes out of
+/// its reach. The union with the card's own liquid melts it into both.
+struct Join {
+    edge: Edge,
+    card: Blob,
+    neck: Option<Bridge>,
+    bulge: Option<Bulge>,
+    /// Toward the card's own edge, which hides what reaches past it.
+    corners: [Option<Edge>; 2],
+}
+
+/// The join of a card `card_box` along `edge` to `c`, if it is within
+/// reach of it.
+fn join(
+    c: &Edge,
+    edge: &Edge,
+    card_box: &Blob,
+    card: &Pose,
+    look: &Look,
+    into: f32,
+) -> Option<Join> {
+    // The card as it shows, out of its own edge, along and across `c`.
+    let [p0, p1] = edge.rect(
+        (card_box.along.0, card_box.across.0.max(0.0)),
+        (card_box.along.1, card_box.across.1),
+    );
+    let (u, v) = (c.local((p0.x, p0.y)), c.local((p1.x, p1.y)));
+    let along = (u.0.min(v.0), u.0.max(v.0));
+    let (gap, out) = (u.1.min(v.1), u.1.max(v.1));
+    let middle = edge.at(card.along, card.across);
+    let (m_along, m_across) = c.local((middle.x, middle.y));
+    let det = Pose {
+        along: m_along,
+        across: m_across,
+        ..*card
+    }
+    .pulled(c.side);
+    if det >= 0.995 {
+        return None;
+    }
+    // Against it, its box runs on into it, which hides its corners there.
+    let near = mix(gap, -into, smoothstep(12.0, 2.0, gap));
+    let g = card.grow.clamp(0.0, 1.0);
+    let ring = card.length(c.side) * g * look.thickness * 0.2;
+    // Gone by the time the card leaves its reach, rather than breaking.
+    let fade = 1.0 - smoothstep(0.95, 0.995, det);
+    let neck = (det > 0.001).then(|| Bridge {
+        from: (m_along, -2.0),
+        to: (m_along, near + 2.0),
+        end: ring * fade,
+        waist: ring * catenoid_waist(det / 0.95) * fade,
+        blend: 8.0 + 12.0 * (1.0 - det),
+        cut: 0.0,
+    });
+    let sag = 96.0 * det * (1.0 - det) * (1.0 - 0.5 * det) * g;
+    let bulge = (sag > 0.05).then_some(Bulge {
+        center: m_along,
+        height: sag,
+    });
+    let toward = if edge.edge < (c.straight.0 + c.straight.1) / 2.0 {
+        [Some(*edge), None]
+    } else {
+        [None, Some(*edge)]
+    };
+    Some(Join {
+        edge: *c,
+        card: Blob {
+            along,
+            across: (near, out),
+            radii: card_box.radii,
+        },
+        neck,
+        bulge,
+        corners: toward,
+    })
+}
+
+/// The neck between the edge and a card pulled off it, along and across.
 #[derive(Clone, Copy)]
 struct Bridge {
     from: (f32, f32),
@@ -278,7 +381,7 @@ struct Bridge {
     cut: f32,
 }
 
-/// A box by its extent along the bar and across it, with its corner radii
+/// A box by its extent along the edge and across it, with its corner radii
 /// in the monitor's order.
 struct Blob {
     along: (f32, f32),
@@ -303,13 +406,13 @@ impl Blob {
         }
     }
 
-    fn rect(&self, frame: &Frame) -> [Point; 2] {
-        frame.rect((self.along.0, self.across.0), (self.along.1, self.across.1))
+    fn rect(&self, edge: &Edge) -> [Point; 2] {
+        edge.rect((self.along.0, self.across.0), (self.along.1, self.across.1))
     }
 
-    fn rounded(&self, frame: &Frame, inset: f32, color: Rgba) -> RoundedRect {
+    fn rounded(&self, edge: &Edge, inset: f32, color: Rgba) -> RoundedRect {
         let blob = self.inset(inset);
-        let [p0, p1] = blob.rect(frame);
+        let [p0, p1] = blob.rect(edge);
         RoundedRect {
             p0,
             p1,
@@ -319,20 +422,23 @@ impl Blob {
     }
 }
 
-/// The bar's edge as a [`Liquid`] melts things into it, moved in by `inset`
+/// The edge as a [`Liquid`] melts things into it, moved in by `inset`
 /// as the fill inside a border: the concave corners keep their centres and
 /// grow by as much, so that the line keeps its width round them and runs on
-/// into the bar's.
-struct Edge<'a> {
-    frame: &'a Frame,
+/// into the edge's.
+struct EdgeLiquid<'a> {
+    edge: &'a Edge,
     inset: f32,
     blend: f32,
     wave: Option<Wave>,
     bulge: Option<Bulge>,
+    /// The edges across its ends, past which nothing of it shows but over
+    /// their borders.
+    corners: [Option<Edge>; 2],
 }
 
-impl Edge<'_> {
-    /// What the liquid covers, along the bar and out from its edge: the
+impl EdgeLiquid<'_> {
+    /// What the liquid covers, along the edge and out from it: the
     /// card, the waves and the bulge, so that the CPU never works through
     /// the empty rest of the monitor.
     fn reach(&self, card: Option<&Blob>, neck: Option<&Bridge>) -> ((f32, f32), f32) {
@@ -374,7 +480,7 @@ impl Edge<'_> {
         (along, out): ((f32, f32), f32),
         color: Rgba,
     ) -> Liquid {
-        let f = self.frame;
+        let f = self.edge;
         let blob = card.inset(self.inset);
         let [p0, p1] = blob.rect(f);
         let (normal, offset) = f.edge();
@@ -386,6 +492,11 @@ impl Edge<'_> {
             blend: n.blend,
             cut: n.cut,
         });
+        let [lo, hi] = self.corners;
+        let along = (
+            lo.map_or(along.0, |c| along.0.max(c.edge - c.overlap)),
+            hi.map_or(along.1, |c| along.1.min(c.edge + c.overlap)),
+        );
         let [c0, c1] = f.rect((along.0, -f.overlap), (along.1, out));
         Liquid {
             p0,
@@ -397,7 +508,7 @@ impl Edge<'_> {
             wave: self.wave,
             bulge: self.bulge,
             neck,
-            extent: [f.bar.0 + self.inset, f.bar.1 - self.inset],
+            extent: [f.straight.0 + self.inset, f.straight.1 - self.inset],
             bounds: [
                 Point::new(c0.x.max(0.0), c0.y.max(0.0)),
                 Point::new(c1.x.min(f.screen.0), c1.y.min(f.screen.1)),
@@ -413,13 +524,13 @@ mod tests {
 
     const SIZE: (f32, f32) = (280.0, 180.0);
 
-    fn frame() -> Frame {
-        Frame {
+    fn edge() -> Edge {
+        Edge {
             side: Side::Below,
             edge: 44.0,
             overlap: 0.0,
             screen: (1920.0, 1080.0),
-            bar: (0.0, 1920.0),
+            straight: (0.0, 1920.0),
         }
     }
 
@@ -453,7 +564,7 @@ mod tests {
         let mut scene = Scene::new();
         draw(
             &mut scene,
-            &frame(),
+            &edge(),
             &Look::new(&Config::default()),
             card,
             &Theme::builtin(),
@@ -487,6 +598,59 @@ mod tests {
         // beside it.
         assert!(liquid.distance(Point::new(400.0, 44.0 + 40.0)) < 0.0);
         assert!(liquid.distance(Point::new(290.0, 44.0 + 40.0)) > 0.0);
+    }
+
+    /// A card hanging from the left side of a frame 8 wide, its middle at
+    /// `along`, whose bottom at 1072 meets it in a corner.
+    fn by_the_corner(along: f32) -> Scene {
+        let left = Edge {
+            side: Side::Right,
+            edge: 8.0,
+            straight: (60.0, 1056.0),
+            ..edge()
+        };
+        let bottom = Edge {
+            side: Side::Above,
+            edge: 1072.0,
+            straight: (24.0, 1896.0),
+            ..edge()
+        };
+        let card = Pose {
+            grow: 1.0,
+            straight: left.straight,
+            corners: [None, Some(bottom)],
+            ..Pose::hanging(along, SIZE, Side::Right)
+        };
+        let mut scene = Scene::new();
+        let look = Look::new(&Config::default());
+        draw(&mut scene, &left, &look, &card, &Theme::builtin());
+        scene
+    }
+
+    fn covered(scene: &Scene, x: f32, y: f32) -> bool {
+        (scene.shapes.iter()).any(|s| s.distance(Point::new(x, y)) < 0.0)
+    }
+
+    #[test]
+    fn in_a_corner_the_card_melts_into_both_edges() {
+        // From 8 to 288 and from 892 down to the bottom at 1072: curving
+        // into the bottom beside its right side, and into the left side
+        // above its top.
+        let scene = by_the_corner(982.0);
+        assert!(covered(&scene, 291.0, 1071.0) && !covered(&scene, 308.0, 1060.0));
+        assert!(covered(&scene, 9.0, 889.0) && !covered(&scene, 20.0, 878.0));
+    }
+
+    #[test]
+    fn near_a_corner_a_neck_joins_the_card_to_the_edge_across() {
+        // Its bottom 82 above the frame's: a neck from there under its
+        // middle, and none beside it.
+        let scene = by_the_corner(900.0);
+        assert!(covered(&scene, 148.0, 1030.0));
+        assert!(!covered(&scene, 260.0, 1030.0));
+        // Out of its reach, nothing joins them.
+        let scene = by_the_corner(700.0);
+        assert!(!covered(&scene, 148.0, 1000.0));
     }
 
     #[test]

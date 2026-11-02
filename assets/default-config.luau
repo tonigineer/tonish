@@ -109,8 +109,9 @@ local settings: Settings = {
             kick = 260,
         },
 
-        -- A panel let go while a neck joins it to the bar, docking there,
-        -- and how hard the bar's edge springs out as it arrives.
+        -- A panel let go while a neck joins it to the bar, or to the frame
+        -- or the monitor's edge, docking there, and how hard that edge
+        -- springs out as it arrives.
         attaching = { stiffness = 320, damping = 0.45, kick = 200 },
 
         -- How much a panel squashes and stretches as it moves, 0 not at
