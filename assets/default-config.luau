@@ -109,8 +109,9 @@ local settings: Settings = {
             kick = 260,
         },
 
-        -- A panel let go while a neck joins it to the bar, docking there,
-        -- and how hard the bar's edge springs out as it arrives.
+        -- A panel let go while a neck joins it to the bar, or to the frame
+        -- or the monitor's edge, docking there, and how hard that edge
+        -- springs out as it arrives.
         attaching = { stiffness = 320, damping = 0.45, kick = 200 },
 
         -- How much a panel squashes and stretches as it moves, 0 not at
@@ -121,6 +122,37 @@ local settings: Settings = {
         -- high they rise in pixels and how many seconds they run. The
         -- spring is the bar's edge ringing when kicked.
         ripples = { height = 7, duration = 1.5, stiffness = 400, damping = 0.25 },
+    },
+
+    -- A frame along every edge of the monitor, which the bar is part of.
+    -- Where the frame meets the bar, the two curve into each other. Both
+    -- width and inverse_radius at 0 leave the frame out.
+    frame = {
+        -- How wide the frame is along every edge, in pixels. A bar with no
+        -- gap takes the frame's place along its edge; with a gap, it sits
+        -- inside the frame. 0 leaves out the frame's sides, and only its
+        -- curved corners show.
+        width = 0,
+
+        -- How round the frame's inside corners are, in pixels: where two of
+        -- its sides meet, and where it meets a bar that spans the monitor.
+        -- Beside a bar with a gap, at most half the gap. A shorter bar
+        -- curves into the frame with the bar's own inverse_radius.
+        inverse_radius = 0,
+
+        -- The frame's colour, as #rrggbb, or #rrggbbaa with its opacity.
+        color = "#111318",
+    },
+
+    -- The monitor's own corners, rounded over everything on it, the frame
+    -- and the bar too, as on a screen whose glass is round there.
+    corners = {
+        -- How round, in pixels. 0 leaves them square.
+        radius = 0,
+
+        -- What shows outside the curve, as #rrggbb, or #rrggbbaa with its
+        -- opacity: black, as the screen's edge is.
+        color = "#000000",
     },
 
     -- Figures on how tonish runs, in the top left corner below the bar:

@@ -8,9 +8,6 @@
         // The Luau extension passes the path to luau-lsp, which Zed starts in
         // the repository's root.
         "definitions": ["assets/tonish.d.luau"],
-        "roblox": {
-          "enabled": false
-        },
         "fflags": {
           "sync": false
         },

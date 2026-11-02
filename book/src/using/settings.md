@@ -43,7 +43,7 @@ The file runs in a sandbox, with Luau's standard libraries such as `math` and `s
 
 ## Completion in your editor
 
-tonish writes `tonish.d.luau` beside `config.luau`, with the types of the settings, `monitor` and the constants such as `Orientation`. It writes the file on every start where it differs, so that it matches the tonish that runs; changes you make to it don't last. Load it in [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), and your editor completes the settings and their values, and marks a misspelt one, in a table annotated with the type `Settings`, as the shipped file's is:
+tonish writes `tonish.d.luau` beside `config.luau`, with the types of the settings, `monitor` and the constants such as `Orientation`. It writes the file on every start where it differs, so that it matches the tonish that runs; changes you make to it don't last. Load it in [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), and your editor completes the settings and their values, and marks a misspelt constant such as `Orientation.Vertcal`, in a table annotated with the type `Settings`, as the shipped file's is:
 
 ```lua
 local settings: Settings = {
@@ -67,6 +67,18 @@ In Zed, add the file to luau-lsp's definitions, with its full path, in the setti
 }
 ```
 
+In VS Code, with the [Luau Language Server](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp) extension, add it to the definition files in your settings or the folder's `.vscode/settings.json`, and turn off what the extension does for Roblox:
+
+```json
+{
+  "luau-lsp.types.definitionFiles": {
+    "@tonish": "/home/you/.config/tonish/tonish.d.luau"
+  },
+  "luau-lsp.platform.type": "standard",
+  "luau-lsp.sourcemap.enabled": false
+}
+```
+
 On the command line, luau-lsp checks the file the same way:
 
 ```sh
@@ -83,7 +95,7 @@ One setting stands above the sections and applies to the whole shell:
 |---|---|---|
 | `border` | The width of the line around the bar and every panel, in pixels. `0` draws none. One width for all of them, so that the bar's line always runs on round the panels that open from it: no line runs between a panel and the bar, and the bar's line turns into the panel's where they meet, round its concave corners or at a sharp one. On a bar that curves out into its edge, the line keeps its width round the curve and runs out into the edge. | `0` |
 
-The rest come in four sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), `animation` for how panels move, and `hud` for the [figures in the corner](running.md#the-figures-in-the-corner).
+The rest come in six sections: `bar` for the bar along the edge of the monitor, `panel` for every panel that opens from the bar, such as the [settings panel](#the-settings-panel), `animation` for how panels move, `hud` for the [figures in the corner](running.md#the-figures-in-the-corner), `frame` for a frame round the monitor, and `corners` for the monitor's own corners.
 
 | `bar` | Values | Default |
 |---|---|---|
@@ -123,15 +135,34 @@ Most motions are springs, set by two numbers. `stiffness`, at least 1, sets how 
 |---|---|---|
 | `show` | `true` shows the [figures in the corner](running.md#the-figures-in-the-corner) on the monitor, `false` hides them. `tonish msg hud` hides or shows them on every monitor until the next save that changes `show`. | `true` |
 
+| `frame` | Values | Default |
+|---|---|---|
+| `width` | How wide the frame is along every edge of the monitor, in pixels. Windows keep clear of it. A bar without a `gap` takes the frame's place along its edge, and the frame's sides come out of it; with a gap, the bar sits inside the frame, the gap away from it. `0` leaves out the sides, and only the frame's curved corners show. [`corners`](#the-settings) rounds the monitor's own corners, outside the frame. | `0` |
+| `inverse_radius` | How round the frame's inside corners are, in pixels, where windows meet it: where two of its sides meet, and where it meets a bar that spans the monitor. Beside a bar with a `gap`, the curves are at most half the gap. A shorter bar curves into the frame with the bar's own `inverse_radius`, as it curves into the monitor's edge without a frame. | `0` |
+| `color` | The colour of the frame and its curves into the bar, as `"#rrggbb"`, or `"#rrggbbaa"` with its opacity, as CSS writes them. The bar keeps the theme's colour. | `"#111318"` |
+
+With `width` and `inverse_radius` both at 0 there is no frame. With either set, the frame draws the bar's body too, so that the two curve into each other, and a `border` runs on round both without a break.
+
+| `corners` | Values | Default |
+|---|---|---|
+| `radius` | How round the monitor's own corners are, in pixels, over everything on it: the frame, the bar, and fullscreen windows too. `0` leaves them square. | `0` |
+| `color` | What shows outside the curve, as `"#rrggbb"` or `"#rrggbbaa"`. | `"#000000"` |
+
 Pixels here are logical pixels, as your compositor counts them: on a monitor at scale 2, a thickness of 44 is 88 physical pixels.
 
 ## The settings panel
 
 Right-click the bar to open the settings panel. It grows out of the bar's inner edge like a drop, centred where you clicked, though no nearer the bar's ends than its straight edge allows, below a bar along the top, to the right of one down the left, shaped by the `panel` settings. Escape, a click outside it, or a left click on the bar folds it back into the bar, where it leaves waves on the bar's edge, as on water after a drop falls in: they run apart along the edge and die away within a second and a half. A click outside tonish only closes it and doesn't reach the window you clicked: sway and Hyprland keep it from the window while a panel is open.
 
-The short bar along the middle of its edge at the bar is its grip. Pull the panel off the bar by it, and a neck of liquid stretches between the two, standing square on the bar and on the panel, shaped as a soap film between two rings: it hardly narrows as you pull, the bar's edge swells after it, and the bar holds the panel back a little. Once you have pulled it `detaching.distance` out, 140 pixels as shipped, the film can't hold: it collapses all at once, the two halves snap back into the bar and the panel, a bead of it falls into the panel, and waves run along the bar. Off the bar, the panel stays where you let it go, and no longer takes the keyboard or closes on a click elsewhere.
+The short bar along the middle of its top is its grip, whatever edge the panel hangs from. Pull the panel off the bar by it, and a neck of liquid stretches between the two, standing square on the bar and on the panel, shaped as a soap film between two rings: it hardly narrows as you pull, the bar's edge swells after it, and the bar holds the panel back a little. Once you have pulled it `detaching.distance` out, 140 pixels as shipped, the film can't hold: it collapses all at once, the two halves snap back into the bar and the panel, a bead of it falls into the panel, and waves run along the bar. Off the bar, the panel stays where you let it go, and no longer takes the keyboard or closes on a click elsewhere.
 
 Bring it back near the bar and the neck reaches out to it again, from anywhere under the bar's straight edge but close to its ends. Let go while a neck joins the two, and the bar pulls the panel in, and it docks where it is along the bar, sliding in as far as it must to stay clear of the bar's ends. A click on it then lets it take the keyboard again. Dragged along the bar past where it can dock, the panel follows more slowly and sags off the bar's end, until the neck breaks.
+
+The bar is not the only edge it docks to. With a [`frame`](#the-settings), it docks to each of the frame's straight inside edges, along the sides and the bottom, and beside a shorter bar; a bar no thicker than the frame runs on into the frame's edge, and the panel docks along all of it. Without a frame, it docks to the monitor's own edges, beside the bar and clear of the round [`corners`](#the-settings). Off the bar, the panel belongs to the edge it comes nearest, or is headed for when you let it go: the neck reaches out to it from there, it docks there, and closed, it folds back into that edge. It docks only where it fits, with room for its curves at either end.
+
+Where two edges meet in a corner, such as the frame's side and its bottom, or the bar and the frame's side, both pull the panel in. Near a corner, a neck reaches out to the panel from the edge across too, and it melts into that edge as it gets close, as into the one it hangs from. Let it go within `detaching.distance` of the corner, 140 pixels as shipped, and it docks in the corner, against both edges, curving into each at its free sides; while you drag it there, the edge across pulls it in as the edge it hangs from does. Pulled off one of the two edges, it stays on the other.
+
+Docked anywhere but under the bar, the panel is pinned there: a pin shows in its top right corner, and as off the bar, it doesn't take the keyboard or close on a click elsewhere or on Escape. Only a click on the pin closes it, and it folds back into the edge it hangs from: clicks on the bar leave it, and a right-click there doesn't open another. Docked under the bar again, it loses the pin, and a click on it lets it take the keyboard again.
 
 It shows no settings yet; the file is still the place to change them.
 
@@ -157,7 +188,8 @@ A monitor that appears while tonish runs, and that the file fails for, gets the 
 - **A setting outside its section**, such as `thickness` outside `bar`, is an error, which names the sections.
 - **A value of the wrong kind** is an error, such as `orientation = 2`, `thickness = "wide"`, or a `radius` with a corner `top`.
 - **A thickness under 1, or a length between 0 and 1,** is an error. The compositor would end tonish's connection for a bar 0 pixels thick or long.
-- **A negative gap, radius, inverse radius, border, `max_fps`, `kick`, `amount`, `height` or `duration`, or a negative `detaching.thickness`,** is an error.
+- **A negative gap, width, radius, inverse radius, border, `max_fps`, `kick`, `amount`, `height` or `duration`, or a negative `detaching.thickness`,** is an error.
+- **A colour that isn't `#rrggbb` or `#rrggbbaa`**, such as `"red"`, is an error.
 - **A spring that would never move or never stop**, with a `stiffness` under 1 or a `damping` under 0.05, is an error. So is a `detaching.distance` under 20 pixels, where the neck starts, or a `pull` outside 0 to 0.9: at 1 the bar would hold the panel for good.
 
 At start, a broken file is an error that ends tonish: it prints what's wrong and exits with 1.

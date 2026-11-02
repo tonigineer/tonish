@@ -9,5 +9,5 @@ pub mod snapshot;
 pub mod text;
 
 pub use scene::{Point, Rgba, Scene};
-pub use shapes::{Circle, Fillet, Liquid, Rect, RoundedRect, Shape, Text};
+pub use shapes::{Circle, Fillet, Liquid, Rect, Rim, RoundedRect, Shape, Text};
 pub use text::Font;

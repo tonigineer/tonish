@@ -410,6 +410,9 @@ mod tests {
                 for _ in 0..1 + (dice.roll() * 6.0) as usize {
                     scene.shapes.push(random_shape(&mut dice, logical));
                 }
+                // Without the shapes the shader has no form for: a scene with
+                // one goes to the CPU, as the engine sends it.
+                scene.shapes.retain(|s| s.sdf().is_some());
                 let mut cpu = vec![0u8; w * h * 4];
                 cpu::draw(&mut cpu, w, h, scale, &scene.shapes);
                 let gpu = gpu.draw(scale, &scene.shapes).unwrap();

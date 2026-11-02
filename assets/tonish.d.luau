@@ -66,6 +66,15 @@ export type Settings = {
     hud: {
         show: boolean?,
     }?,
+    frame: {
+        width: number?,
+        inverse_radius: number?,
+        color: string?,
+    }?,
+    corners: {
+        radius: number?,
+        color: string?,
+    }?,
 }
 
 declare monitor: {

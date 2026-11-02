@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use engine::{Output, OutputId};
 use mlua::{Lua, Table, Value, VmState};
+use renderer::Rgba;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 
@@ -51,6 +52,41 @@ pub struct Config {
     pub panel: Panels,
     pub animation: Animation,
     pub hud: Hud,
+    pub frame: Frame,
+    pub corners: Corners,
+}
+
+/// The monitor's own corners, rounded over everything on it, as on a
+/// screen whose glass is round there.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Corners {
+    /// Logical pixels; 0 leaves them square.
+    #[serde(deserialize_with = "corner_radius")]
+    pub radius: f32,
+    #[serde(deserialize_with = "color")]
+    pub color: Rgba,
+}
+
+/// Logical pixels. Both at 0 leave the frame out, whatever its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Frame {
+    #[serde(deserialize_with = "frame_width")]
+    pub width: f32,
+    /// Of its inside corners, and where it meets a bar that spans the
+    /// monitor. A shorter bar curves into the frame with its own
+    /// [`Bar::inverse_radius`].
+    #[serde(deserialize_with = "inverse_radius")]
+    pub inverse_radius: f32,
+    #[serde(deserialize_with = "color")]
+    pub color: Rgba,
+}
+
+impl Frame {
+    pub fn shown(&self) -> bool {
+        self.width > 0.0 || self.inverse_radius > 0.0
+    }
 }
 
 /// The figures in the top left corner. `tonish msg hud` overrides `show`
@@ -525,6 +561,30 @@ fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
     not_negative("duration", f32::deserialize(d)?)
 }
 
+fn frame_width<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("width", f32::deserialize(d)?)
+}
+
+fn corner_radius<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    not_negative("radius", f32::deserialize(d)?)
+}
+
+/// `#rrggbb`, or `#rrggbbaa` with its opacity, as CSS writes them.
+fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Rgba, D::Error> {
+    let text = String::deserialize(d)?;
+    let wrong = || D::Error::custom(format!("color {text:?} is neither #rrggbb nor #rrggbbaa"));
+    let hex = text.strip_prefix('#').ok_or_else(wrong)?;
+    if !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(wrong());
+    }
+    let value = u32::from_str_radix(hex, 16).map_err(|_| wrong())?;
+    match hex.len() {
+        6 => Ok(Rgba::from_hex(value, 1.0)),
+        8 => Ok(Rgba::from_hex(value >> 8, (value & 0xff) as f32 / 255.0)),
+        _ => Err(wrong()),
+    }
+}
+
 fn at_least<E: Error>(name: &str, least: f32, value: f32) -> Result<f32, E> {
     if value >= least {
         Ok(value)
@@ -624,6 +684,15 @@ mod tests {
                 },
             },
             hud: Hud { show: true },
+            frame: Frame {
+                width: 0.0,
+                inverse_radius: 0.0,
+                color: Rgba::from_hex(0x111318, 1.0),
+            },
+            corners: Corners {
+                radius: 0.0,
+                color: Rgba::from_hex(0x000000, 1.0),
+            },
         };
         assert_eq!(Config::default(), want);
     }
@@ -644,8 +713,19 @@ mod tests {
         };
         assert_eq!(
             keys(&shipped),
-            ["animation", "bar", "border", "hud", "panel"]
+            [
+                "animation",
+                "bar",
+                "border",
+                "corners",
+                "frame",
+                "hud",
+                "panel"
+            ]
         );
+        assert_eq!(keys(&shipped.get("corners").unwrap()), ["color", "radius"]);
+        let frame = ["color", "inverse_radius", "width"];
+        assert_eq!(keys(&shipped.get("frame").unwrap()), frame);
         let animation: Table = shipped.get("animation").unwrap();
         let motions = [
             "attaching",
@@ -738,6 +818,14 @@ mod tests {
         assert_eq!(config.bar.orientation, shipped.bar.orientation);
         assert_eq!(config.panel, shipped.panel);
         assert_eq!(settings("return {}").unwrap(), shipped);
+    }
+
+    #[test]
+    fn a_colour_is_hex_as_css_writes_it() {
+        let opaque = settings("return { frame = { color = \"#C9a96e\" } }").unwrap();
+        assert_eq!(opaque.frame.color, Rgba::from_hex(0xc9a96e, 1.0));
+        let half = settings("return { frame = { color = \"#00000080\" } }").unwrap();
+        assert_eq!(half.frame.color, Rgba::from_rgb(0, 0, 0, 128.0 / 255.0));
     }
 
     #[test]
@@ -859,6 +947,10 @@ mod tests {
             ("border = -1", "border -1 is negative"),
             ("animation = { max_fps = -30 }", "max_fps -30 is negative"),
             ("hud = { show = 1 }", "hud.show"),
+            ("frame = { width = -2 }", "width -2 is negative"),
+            ("frame = { color = \"red\" }", "neither #rrggbb"),
+            ("frame = { color = \"#12345\" }", "neither #rrggbb"),
+            ("frame = { color = \"#+1234567\" }", "neither #rrggbb"),
             (
                 "animation = { popout = { stiffness = 0 } }",
                 "animation.popout.stiffness: stiffness 0 is less than 1",

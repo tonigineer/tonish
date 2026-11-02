@@ -1,0 +1,15 @@
+// VS Code's settings for this repository, as `.zed/settings.json` sets Zed.
+{
+  // The settings' types, from the repository rather than the copy tonish
+  // writes beside the user's settings, so that they match the code here. The
+  // extension finds the path from the first folder of the workspace, which
+  // has to be the repository.
+  "luau-lsp.types.definitionFiles": {
+    "@tonish": "assets/tonish.d.luau"
+  },
+  // The settings are plain Luau, not Roblox: without these, the extension
+  // loads Roblox's types and flags, and looks for a Rojo sourcemap.
+  "luau-lsp.platform.type": "standard",
+  "luau-lsp.fflags.sync": false,
+  "luau-lsp.sourcemap.enabled": false
+}

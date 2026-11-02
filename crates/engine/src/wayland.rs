@@ -243,7 +243,11 @@ impl Surface {
     /// engine uses.
     fn keeps(&self, spec: &SurfaceSpec) -> bool {
         match &self.role {
-            Role::Layer { spec: old, .. } => old.name == spec.name && old.layer == spec.layer,
+            // One that went to the GPU can't come back to the CPU, and one
+            // kept off it would need a window: either is a new surface.
+            Role::Layer { spec: old, .. } => {
+                old.name == spec.name && old.layer == spec.layer && old.gpu == spec.gpu
+            }
             Role::Popup { .. } => false,
         }
     }
@@ -605,6 +609,15 @@ impl Engine {
         }
     }
 
+    fn wants_gpu(&self, t: Target) -> bool {
+        match t {
+            Target::Layer(oi, si) => (self.outs.get(oi))
+                .and_then(|o| o.surfaces.get(si))
+                .is_some_and(|s| matches!(&s.role, Role::Layer { spec, .. } if spec.gpu)),
+            Target::Popup => true,
+        }
+    }
+
     fn targets(&self, redraw: Redraw) -> Vec<Target> {
         let outs: Vec<_> = self
             .outs
@@ -724,7 +737,11 @@ impl Engine {
             }
             surf.frame_pending = true;
         }
-        if let GlesState::Running(thread) = &mut self.gles {
+        let gpu = match &surf.role {
+            Role::Layer { spec, .. } => spec.gpu,
+            Role::Popup { .. } => true,
+        };
+        if gpu && let GlesState::Running(thread) = &mut self.gles {
             let built = started.elapsed();
             let frame = gles::Frame {
                 surface: surf.role.wl_surface().clone(),
@@ -825,8 +842,11 @@ impl Engine {
                     other => other,
                 };
                 self.app.gpu_started(&device);
+                // What stays on the CPU has nothing to move.
                 for t in self.targets(Redraw::Everything) {
-                    self.draw(t);
+                    if self.wants_gpu(t) {
+                        self.draw(t);
+                    }
                 }
             }
             gles::Report::Drew(on, drawn, sent) => {

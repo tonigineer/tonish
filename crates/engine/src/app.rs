@@ -61,6 +61,10 @@ pub struct SurfaceSpec {
     /// `false` lets every click through to whatever is under the surface,
     /// as for figures shown over windows.
     pub input: bool,
+    /// `false` keeps it on the CPU for good, for a surface drawn once and
+    /// small: the CPU draws it in microseconds, while an EGL window holds
+    /// its buffers for as long as the surface lives.
+    pub gpu: bool,
 }
 
 /// One of the app's surfaces, for the events that happen on it and for

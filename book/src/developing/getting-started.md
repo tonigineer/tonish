@@ -51,3 +51,4 @@
 | `.github/workflows/` | CI for pull requests, releases, and the book's site. |
 | `.cargo/config.toml` | Builds for the CPU you build on, which suits benchmarks. Releases override it. |
 | `.zed/settings.json` | Zed's settings for this repository: luau-lsp with the settings' types, so that Zed completes and checks `assets/default-config.luau`. |
+| `.vscode/` | The same for VS Code, with its luau-lsp extension, which `extensions.json` recommends. Open the repository itself as the folder, since the extension finds the types from the workspace's first folder. |
