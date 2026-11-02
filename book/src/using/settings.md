@@ -43,7 +43,7 @@ The file runs in a sandbox, with Luau's standard libraries such as `math` and `s
 
 ## Completion in your editor
 
-tonish writes `tonish.d.luau` beside `config.luau`, with the types of the settings, `monitor` and the constants such as `Orientation`. It writes the file on every start where it differs, so that it matches the tonish that runs; changes you make to it don't last. Load it in [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), and your editor completes the settings and their values, and marks a misspelt one, in a table annotated with the type `Settings`, as the shipped file's is:
+tonish writes `tonish.d.luau` beside `config.luau`, with the types of the settings, `monitor` and the constants such as `Orientation`. It writes the file on every start where it differs, so that it matches the tonish that runs; changes you make to it don't last. Load it in [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp), and your editor completes the settings and their values, and marks a misspelt constant such as `Orientation.Vertcal`, in a table annotated with the type `Settings`, as the shipped file's is:
 
 ```lua
 local settings: Settings = {
@@ -64,6 +64,18 @@ In Zed, add the file to luau-lsp's definitions, with its full path, in the setti
       }
     }
   }
+}
+```
+
+In VS Code, with the [Luau Language Server](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp) extension, add it to the definition files in your settings or the folder's `.vscode/settings.json`, and turn off what the extension does for Roblox:
+
+```json
+{
+  "luau-lsp.types.definitionFiles": {
+    "@tonish": "/home/you/.config/tonish/tonish.d.luau"
+  },
+  "luau-lsp.platform.type": "standard",
+  "luau-lsp.sourcemap.enabled": false
 }
 ```
 
