@@ -162,6 +162,8 @@ The bar is not the only edge it docks to. With a [`frame`](#the-settings), it do
 
 Where two edges meet in a corner, such as the frame's side and its bottom, or the bar and the frame's side, both pull the panel in. Near a corner, a neck reaches out to the panel from the edge across too, and it melts into that edge as it gets close, as into the one it hangs from. Let it go within `detaching.distance` of the corner, 140 pixels as shipped, and it docks in the corner, against both edges, curving into each at its free sides; while you drag it there, the edge across pulls it in as the edge it hangs from does. Pulled off one of the two edges, it stays on the other.
 
+Docked anywhere but under the bar, the panel is pinned there: a pin shows in its top right corner, and as off the bar, it doesn't take the keyboard or close on a click elsewhere or on Escape. Only a click on the pin closes it, and it folds back into the edge it hangs from: clicks on the bar leave it, and a right-click there doesn't open another. Docked under the bar again, it loses the pin, and a click on it lets it take the keyboard again.
+
 It shows no settings yet; the file is still the place to change them.
 
 ## Changes apply when you save

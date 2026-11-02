@@ -4,7 +4,7 @@ use engine::Side;
 use renderer::shapes::{Bulge, Neck, Wave};
 use renderer::{Circle, Liquid, Point, Rgba, RoundedRect, Scene, Shape};
 
-use super::pose::{GRIP, GRIP_IN};
+use super::pose::{GRIP, GRIP_IN, PIN_IN};
 use super::{Edge, Pose};
 use crate::config::{Config, Ripples};
 use crate::hang::Edges;
@@ -288,7 +288,29 @@ pub fn draw(scene: &mut Scene, edge: &Edge, look: &Look, card: &Pose, t: &Theme)
             radii: [GRIP.1 / 2.0; 4],
             color: t.on_surface.alpha(fade * (0.25 + 0.35 * card.grip)),
         });
+        // The pin, in the top right corner, while it is docked away from
+        // the bar.
+        if card.pin > 0.05 {
+            let at = Point::new(p1.x - PIN_IN, p0.y + PIN_IN);
+            pin(scene, at, card.pin * fade, t.primary);
+        }
     }
+}
+
+/// A pushpin 14 pixels high at `scale` 1, its collar's middle at `at`:
+/// a cap, a shaft, a collar and a needle, square to one another, which a
+/// card's shapes, all upright, draw sharply.
+fn pin(scene: &mut Scene, at: Point, scale: f32, color: Rgba) {
+    let part = |(x0, y0): (f32, f32), (x1, y1): (f32, f32), r: f32| RoundedRect {
+        p0: Point::new(at.x + x0 * scale, at.y + y0 * scale),
+        p1: Point::new(at.x + x1 * scale, at.y + y1 * scale),
+        radii: [r * scale; 4],
+        color,
+    };
+    scene.push(part((-3.5, -7.0), (3.5, -5.0), 1.0));
+    scene.push(part((-2.5, -5.5), (2.5, -1.0), 0.5));
+    scene.push(part((-5.0, -1.5), (5.0, 0.5), 1.0));
+    scene.push(part((-0.75, 0.0), (0.75, 7.0), 0.75));
 }
 
 /// The card's join to an edge across a corner of the one it hangs from,
@@ -651,6 +673,30 @@ mod tests {
         // Out of its reach, nothing joins them.
         let scene = by_the_corner(700.0);
         assert!(!covered(&scene, 148.0, 1000.0));
+    }
+
+    #[test]
+    fn pinned_it_shows_a_pin_in_its_top_right_corner() {
+        let t = Theme::builtin();
+        let pinned = |pin: f32| {
+            let card = Pose {
+                grow: 1.0,
+                pin,
+                ..Pose::hanging(400.0, SIZE, Side::Below)
+            };
+            let mut scene = Scene::new();
+            draw(
+                &mut scene,
+                &edge(),
+                &Look::new(&Config::default()),
+                &card,
+                &t,
+            );
+            // From 260 to 540, and from 44: the pin's shaft at 524, 57.
+            (scene.shapes.iter())
+                .any(|s| s.color() == t.primary && s.distance(Point::new(524.0, 57.0)) < 0.0)
+        };
+        assert!(pinned(1.0) && !pinned(0.0));
     }
 
     #[test]

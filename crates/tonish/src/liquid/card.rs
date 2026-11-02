@@ -22,6 +22,11 @@ const RECOIL: (f32, f32) = (700.0, 0.4);
 const SQUASH: f32 = 0.0001;
 const SQUASH_MAX: f32 = 0.15;
 
+/// The pin grows in, and shrinks away, in about a quarter of a second, a
+/// little past its size, and grows by a fifth under the pointer.
+const PIN: (f32, f32) = (260.0, 0.55);
+const PIN_LIT: f32 = 1.2;
+
 /// Dragged along its edge past where it may dock, the share of the hand's
 /// way the card follows along it, and how far it sags off the edge for each
 /// pixel of that way.
@@ -37,8 +42,11 @@ pub struct Card {
     /// The edge it hangs from, or last hung from, or is nearest while it is
     /// free, which its position is along and across.
     pub edge: Edge,
-    /// Every edge it may dock to, its own among them.
+    /// Every edge it may dock to, its own among them, the bar's first.
     docks: Vec<Dock>,
+    /// Along the first edge, where the bar itself runs straight, which the
+    /// edge may run on past, into the frame's.
+    bar: (f32, f32),
     /// Its width and height on the monitor, in logical pixels.
     pub size: (f32, f32),
     /// The settings' animation section, which a save changes in the middle
@@ -58,6 +66,8 @@ pub struct Card {
     squash: (Spring, Spring),
     /// From 0 as the neck breaks to 1 once its stubs are back in.
     recoil: Spring,
+    /// From 0 to 1 as the pin shows.
+    pin: Spring,
     /// Seconds since the neck last broke.
     since: f32,
     /// While the grip is held: where on the card it was taken, from the
@@ -67,6 +77,10 @@ pub struct Card {
     /// reaches out to it again doesn't bring it back by itself.
     out: bool,
     hover: bool,
+    /// The pointer is over the pin, and was pressed on it, which a release
+    /// on it too makes a click.
+    on_pin: bool,
+    pin_pressed: bool,
     /// Where waves started on the edge, and seconds since: a clock
     /// rather than a spring, since waves run at a steady speed.
     ripple: Option<(f32, f32)>,
@@ -85,10 +99,12 @@ pub struct Card {
 
 impl Card {
     /// A card of `size` that hangs at `home` along the edge of the first of
-    /// `docks`, which must not be empty, and may dock to any of them.
+    /// `docks`, which must not be empty and is the bar's, and may dock to any
+    /// of them. `bar` is where along that edge the bar itself runs.
     pub fn new(
         spec: PopupSpec,
         docks: Vec<Dock>,
+        bar: (f32, f32),
         size: (f32, f32),
         home: f32,
         anim: Animation,
@@ -107,6 +123,7 @@ impl Card {
             spec,
             edge,
             docks,
+            bar,
             size,
             anim,
             dock,
@@ -118,10 +135,13 @@ impl Card {
             stray,
             squash: (Spring::new(0.0), Spring::new(0.0)),
             recoil: Spring::new(1.0),
+            pin: Spring::new(0.0),
             since: f32::INFINITY,
             held: None,
             out: false,
             hover: false,
+            on_pin: false,
+            pin_pressed: false,
             ripple: None,
             folded: false,
             drop_at: home,
@@ -150,6 +170,7 @@ impl Card {
             &self.squash.0,
             &self.squash.1,
             &self.recoil,
+            &self.pin,
         ]
         .iter()
         .any(|s| !s.settled())
@@ -160,6 +181,16 @@ impl Card {
 
     pub fn gone(&self) -> bool {
         self.closing() && !self.moving()
+    }
+
+    /// Docked anywhere but under the bar it opened from, where it shows a
+    /// pin: it stays there, as a free card stays where it is let go, and
+    /// takes neither the keyboard nor clicks outside, which would fold it
+    /// away at the next click elsewhere.
+    pub fn pinned(&self) -> bool {
+        let on_bar = self.edge == self.docks[0].edge
+            && (self.bar.0..=self.bar.1).contains(&self.along.target);
+        !self.out && self.held.is_none() && !self.closing() && !on_bar
     }
 
     pub fn pose(&self) -> Pose {
@@ -180,6 +211,7 @@ impl Card {
                 0.0
             },
             reach: self.anim.detaching.distance,
+            pin: self.pin.value,
             dock: self.dock,
             straight: self.edge.straight,
             corners: self.corners,
@@ -204,6 +236,20 @@ impl Card {
         let target = self.grow.target;
         aim(&mut self.grow, target, grow);
         aim(&mut self.bounce, 0.0, a.ripples.motion());
+        let pinned = self.pinned();
+        let pin = Motion {
+            stiffness: PIN.0,
+            damping: PIN.1,
+        };
+        let size = match (pinned, self.on_pin) {
+            (false, _) => 0.0,
+            (true, false) => 1.0,
+            (true, true) => PIN_LIT,
+        };
+        aim(&mut self.pin, size, pin);
+        if pinned {
+            self.spec.grab = false;
+        }
         let squash = |v: f32| (v.abs() * SQUASH).min(SQUASH_MAX) * a.wobble.amount;
         let (along, across) = (squash(self.along.velocity), squash(self.across.velocity));
         aim(&mut self.squash.0, along, a.wobble.motion());
@@ -217,6 +263,7 @@ impl Card {
             &mut self.squash.0,
             &mut self.squash.1,
             &mut self.recoil,
+            &mut self.pin,
         ] {
             s.step(dt);
         }
@@ -298,7 +345,8 @@ impl Card {
     /// docked, slides back within where it may dock. With no edge left on
     /// that side, it keeps its place on the monitor, and docked, hangs from
     /// the first edge again.
-    pub fn reframe(&mut self, docks: Vec<Dock>) {
+    pub fn reframe(&mut self, docks: Vec<Dock>, bar: (f32, f32)) {
+        self.bar = bar;
         let (edge, along) = (self.edge, self.along.value);
         let far = |d: &Dock| {
             let past = (d.range.0 - along).max(along - d.range.1).max(0.0);
@@ -421,10 +469,10 @@ impl Card {
         self.was = self.pose().detached(to.side);
     }
 
-    /// The pointer left the card, so that the grip goes dark. Returns
-    /// whether that needs a frame.
+    /// The pointer left the card, so that the grip goes dark and the pin
+    /// shrinks back. Returns whether that needs a frame.
     pub fn leave(&mut self) -> bool {
-        std::mem::take(&mut self.hover)
+        std::mem::take(&mut self.hover) | std::mem::take(&mut self.on_pin)
     }
 
     /// Folds the card back into its edge, or, off it, shrinks it where
@@ -438,6 +486,23 @@ impl Card {
 
     pub fn on_grip(&self, at: (f32, f32)) -> bool {
         !self.closing() && self.pose().on_grip(&self.edge, at)
+    }
+
+    /// Over the pin, once it shows.
+    pub fn on_pin(&self, at: (f32, f32)) -> bool {
+        self.pinned() && self.pose().on_pin(&self.edge, at)
+    }
+
+    /// A press on the pin, which the release turns into a click if it is
+    /// on the pin too, as a button takes a click.
+    pub fn press_pin(&mut self, at: (f32, f32)) -> bool {
+        self.pin_pressed = self.on_pin(at);
+        self.pin_pressed
+    }
+
+    /// Whether this release ends a click on the pin.
+    pub fn release_pin(&mut self, at: (f32, f32)) -> bool {
+        std::mem::take(&mut self.pin_pressed) && self.on_pin(at)
     }
 
     pub fn on_card(&self, at: (f32, f32)) -> bool {
@@ -455,9 +520,9 @@ impl Card {
     /// behind. Returns whether that needs a frame: while it is held, or as
     /// the pointer comes onto the grip or leaves it, which lights it.
     pub fn drag(&mut self, at: (f32, f32)) -> bool {
-        let hover = self.on_grip(at);
-        let lit = hover != self.hover;
-        self.hover = hover;
+        let (hover, on_pin) = (self.on_grip(at), self.on_pin(at));
+        let lit = hover != self.hover || on_pin != self.on_pin;
+        (self.hover, self.on_pin) = (hover, on_pin);
         let Some((da, dc)) = self.held else {
             return lit;
         };
@@ -574,6 +639,8 @@ impl Card {
             Cursor::Grabbing
         } else if self.on_grip(at) {
             Cursor::Grab
+        } else if self.on_pin(at) {
+            Cursor::Pointer
         } else {
             Cursor::Default
         }
@@ -615,6 +682,7 @@ mod tests {
         Card::new(
             spec,
             vec![bar],
+            (0.0, 1920.0),
             (280.0, 180.0),
             400.0,
             Config::default().animation,
@@ -918,6 +986,46 @@ mod tests {
         assert!(!p.out());
         assert!((card.across - 90.0).abs() < 0.5, "{card:?}");
         assert!(card.along > 400.0, "{card:?}");
+    }
+
+    #[test]
+    fn docked_away_from_the_bar_it_is_pinned_and_takes_no_grab() {
+        let p = let_go_beside_the_left_side((8.0 + 140.0 + 40.0, 700.0), false);
+        assert!(p.pinned() && !p.spec.grab);
+        assert!((p.pose().pin - 1.0).abs() < 0.01, "{:?}", p.pose());
+        // On the bar, wherever along it, it is not.
+        let mut p = opened();
+        assert!(!p.pinned() && p.pose().pin == 0.0);
+        drag(&mut p, (400.0, 53.0), (900.0, 140.0));
+        p.release();
+        run(&mut p, 1.0);
+        assert!(!p.pinned());
+    }
+
+    #[test]
+    fn its_pin_takes_a_click_that_starts_and_ends_on_it() {
+        let mut p = let_go_beside_the_left_side((8.0 + 140.0 + 40.0, 700.0), false);
+        // From 8 to 288, and down from 610: the pin's middle at 272, 626.
+        let (pin, card) = ((272.0, 626.0), (150.0, 700.0));
+        assert_eq!(p.cursor(pin), Cursor::Pointer);
+        assert!(p.press_pin(pin) && p.release_pin(pin));
+        assert!(p.press_pin(pin) && !p.release_pin(card));
+        assert!(!p.press_pin(card) && !p.release_pin(pin));
+        // Under the pointer, it grows.
+        p.drag(pin);
+        run(&mut p, 0.5);
+        assert!(p.pose().pin > 1.1, "{:?}", p.pose());
+    }
+
+    #[test]
+    fn beside_the_bar_on_an_edge_it_runs_on_into_it_is_pinned() {
+        let mut p = opened();
+        // The bar from 500 to 1400 along an edge that runs on past it.
+        p.bar = (500.0, 1400.0);
+        drag(&mut p, (400.0, 53.0), (300.0, 53.0));
+        p.release();
+        run(&mut p, 1.0);
+        assert!(p.pinned(), "{:?}", p.pose());
     }
 
     #[test]

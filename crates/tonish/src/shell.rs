@@ -261,7 +261,7 @@ impl Shell {
         let home = bar.edge.local((x as f32 + at.0, y as f32 + at.1)).0;
         let home = home.clamp(bar.range.0, bar.range.1);
         let anim = self.monitors.get(&output)?.config.animation;
-        let mut card = liquid::Card::new(place.spec, place.docks, size, home, anim);
+        let mut card = liquid::Card::new(place.spec, place.docks, place.bar, size, home, anim);
         // A step of no time, for the input region the engine needs before
         // the first frame.
         card.step(0.0);
@@ -308,10 +308,11 @@ impl Shell {
             Side::Right => (y, x + reach),
             Side::Left => (y, x + t - reach),
         };
-        let mut straight = (
+        let bar_straight = (
             origin + panel.room() + first,
             origin + length - panel.room() - last,
         );
+        let mut straight = bar_straight;
         if let Some(f) = merged {
             let along = match side {
                 Side::Above | Side::Below => out.size.0,
@@ -370,7 +371,11 @@ impl Shell {
             input: None,
             parent_at: (x as i32, y as i32),
         };
-        Some(Place { docks, spec })
+        Some(Place {
+            docks,
+            bar: bar_straight,
+            spec,
+        })
     }
 
     /// The figures come after all of a monitor's other surfaces.
@@ -417,6 +422,8 @@ struct Place {
     /// The panel's own first, which the card opens from, then the other
     /// edges it may dock to.
     docks: Vec<liquid::Dock>,
+    /// Along the first, where the panel itself runs straight.
+    bar: (f32, f32),
     spec: PopupSpec,
 }
 
@@ -804,7 +811,7 @@ impl App for Shell {
             (Some(p), Some(place)) => {
                 p.anim = self.monitors[&p.spec.parent.0].config.animation;
                 p.spec.parent_at = place.spec.parent_at;
-                p.reframe(place.docks);
+                p.reframe(place.docks, place.bar);
             }
             (Some(_), None) => self.popup = None,
             (None, _) => {}
@@ -821,9 +828,13 @@ impl App for Shell {
 
     /// Any other click on a panel closes the settings, as a click outside
     /// them would: the compositor ends their grab on its own only for clicks
-    /// outside every surface of tonish.
+    /// outside every surface of tonish. Pinned, they stay for every click
+    /// but one on their pin, a right-click on the bar too, which would hang
+    /// new ones in their place.
     fn pressed(&mut self, on: On, at: (f32, f32), button: Button) {
+        let pinned = self.popup.as_ref().is_some_and(liquid::Card::pinned);
         match on {
+            On::Surface(..) if pinned => {}
             On::Surface(output, surface) if button == Button::Right => {
                 self.popup = self.hang(output, surface, at, settings::SIZE);
             }
@@ -840,14 +851,20 @@ impl App for Shell {
                 if !p.on_card(at) {
                     // Hyprland sends a click outside the card to it while it
                     // holds the grab, with a point outside it.
-                    self.close();
+                    if !pinned {
+                        self.close();
+                    }
                     return;
                 }
-                if !p.out() && !p.closing() && !p.spec.grab {
+                if !p.out() && !p.closing() && !p.spec.grab && !p.pinned() {
                     // Back on the bar after it was pulled off, it takes the
                     // grab again at the first press on it, the grip's too,
                     // the earliest it can: a grab has to start with a press.
+                    // Pinned elsewhere, it stays without, as a free card.
                     p.spec.grab = true;
+                }
+                if button == Button::Left && p.press_pin(at) {
+                    return;
                 }
                 if button == Button::Left && p.on_grip(at) {
                     p.hold(at);
@@ -875,13 +892,20 @@ impl App for Shell {
         }
     }
 
-    fn released(&mut self, on: On, _at: (f32, f32), button: Button) {
+    /// A click on the pin of a card docked away from the bar closes it,
+    /// which nothing else outside the bar does.
+    fn released(&mut self, on: On, at: (f32, f32), button: Button) {
         if on == On::Popup
             && button == Button::Left
             && let Some(p) = &mut self.popup
         {
+            let unpinned = p.release_pin(at);
             p.release();
-            self.draw_popup_again();
+            if unpinned {
+                self.close();
+            } else {
+                self.draw_popup_again();
+            }
         }
     }
 
@@ -1275,6 +1299,42 @@ mod tests {
         let popup = shell.popup().unwrap();
         assert!(!popup.grab);
         assert!(card(&shell).1 > 400, "{:?}", card(&shell));
+    }
+
+    #[test]
+    fn pinned_only_a_click_on_its_pin_closes_the_card() {
+        let mut shell = shell_on_dp1("return { frame = { width = 8 } }");
+        let si = names(&mut shell).iter().position(|n| *n == "panel");
+        let bar = On::Surface(OutputId(1), SurfaceId(si.unwrap()));
+        shell.pressed(bar, (400.0, 20.0), Button::Right);
+        play(&mut shell, 1.0);
+        // Off the bar by its grip, and to the frame's left side, where it
+        // docks, from 8 to 288, its top at 500.
+        shell.pressed(On::Popup, (400.0, 53.0), Button::Left);
+        for (x, y) in [
+            (400.0, 300.0),
+            (400.0, 600.0),
+            (300.0, 550.0),
+            (178.0, 509.0),
+        ] {
+            shell.moved(On::Popup, (x, y));
+            play(&mut shell, 0.2);
+        }
+        shell.released(On::Popup, (178.0, 509.0), Button::Left);
+        play(&mut shell, 1.5);
+        assert!(shell.popup.as_ref().is_some_and(liquid::Card::pinned));
+        let docked = card(&shell);
+        // Clicks on the bar, with either button, leave it be.
+        shell.pressed(bar, (900.0, 20.0), Button::Left);
+        shell.pressed(bar, (900.0, 20.0), Button::Right);
+        play(&mut shell, 0.5);
+        assert_eq!(card(&shell), docked);
+        // Its pin, 16 in from its top right corner, closes it.
+        let pin = (288.0 - 16.0, 500.0 + 16.0);
+        shell.pressed(On::Popup, pin, Button::Left);
+        shell.released(On::Popup, pin, Button::Left);
+        play(&mut shell, 2.0);
+        assert_eq!(shell.popup(), None);
     }
 
     /// Pulled off the bar and dragged back onto it by the grip, the card

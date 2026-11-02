@@ -1,6 +1,7 @@
 from harness import near, wait_for
 
 SURFACE = (0x11, 0x13, 0x18)
+PIN = (0xC9, 0xA9, 0x6E)
 
 
 def framed(desktop, text):
@@ -82,7 +83,7 @@ def test_a_translucent_frame_is_drawn_once_everywhere(desktop):
         assert desktop.at(x, y) == desktop.at(*side), (x, y, desktop.at(x, y))
 
 
-def test_a_card_pulled_off_the_bar_docks_to_the_frame_s_side(desktop):
+def test_a_card_pulled_off_the_bar_docks_to_the_frame_s_side_pinned(desktop):
     framed(desktop, 'return { frame = { width = 8, color = "#ff1318" } }')
     desktop.click(800, 20, "BTN_RIGHT")
     assert wait_for(lambda: "popup grabbed" in desktop.logged()), desktop.logged()
@@ -98,3 +99,15 @@ def test_a_card_pulled_off_the_bar_docks_to_the_frame_s_side(desktop):
     )
     assert near(desktop.at(12, 581), SURFACE), desktop.at(12, 581)
     assert near(desktop.at(4, 581), (0xFF, 0x13, 0x18)), desktop.at(4, 581)
+    # Pinned there: the pin in its top right corner, 16 in from it, its
+    # shaft just above, and it stays on a click elsewhere, the bar too.
+    assert wait_for(lambda: near(desktop.at(272, 491 + 16 - 3), PIN)), desktop.at(
+        272, 491 + 13
+    )
+    desktop.click(1500, 400, "BTN_LEFT")
+    desktop.click(900, 20, "BTN_LEFT")
+    assert not wait_for(lambda: "popup dismissed" in desktop.logged(), seconds=0.5)
+    assert near(desktop.at(12, 581), SURFACE), desktop.at(12, 581)
+    # A click on the pin closes it.
+    desktop.click(272, 491 + 16, "BTN_LEFT")
+    assert wait_for(lambda: "popup closed" in desktop.logged()), desktop.logged()

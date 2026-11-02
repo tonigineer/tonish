@@ -14,6 +14,12 @@ pub(super) const GRIP: (f32, f32) = (30.0, 3.0);
 pub(super) const GRIP_IN: f32 = 9.0;
 const GRIP_HIT: (f32, f32) = (132.0, 18.0);
 
+/// How far in from the card's top and right sides the pin's middle is, and
+/// the square round it that takes the pointer, larger than the pin, which a
+/// hand finds more easily.
+pub(super) const PIN_IN: f32 = 16.0;
+const PIN_HIT: f32 = 26.0;
+
 /// Where the card starts to leave its edge: its middle this many pixels
 /// further out than where it hangs, as pleama's.
 const LEAVE: f32 = 14.0;
@@ -68,6 +74,9 @@ pub struct Pose {
     /// How far its middle goes out from where it hangs before the neck
     /// breaks.
     pub reach: f32,
+    /// 0 to 1, as the pin shows that it is docked away from the bar, and
+    /// more while the pointer is over it.
+    pub pin: f32,
     /// Along the edge, where its middle may hang.
     pub dock: (f32, f32),
     /// As [`Edge::straight`].
@@ -112,6 +121,7 @@ impl Pose {
             drop: None,
             grip: 0.0,
             reach: 140.0,
+            pin: 0.0,
             dock: (f32::NEG_INFINITY, f32::INFINITY),
             straight: (f32::NEG_INFINITY, f32::INFINITY),
             corners: [None, None],
@@ -158,6 +168,13 @@ impl Pose {
             (self.along - l, self.across - a),
             (self.along + l, self.across + a),
         )
+    }
+
+    /// Whether `at`, on the monitor, is on its pin.
+    pub fn on_pin(&self, edge: &Edge, (x, y): (f32, f32)) -> bool {
+        let [p0, p1] = self.rect(edge);
+        let (cx, cy) = (p1.x - PIN_IN, p0.y + PIN_IN);
+        (x - cx).abs() <= PIN_HIT / 2.0 && (y - cy).abs() <= PIN_HIT / 2.0
     }
 
     /// Whether `at`, on the monitor, is on its grip.
